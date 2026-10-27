@@ -177,6 +177,13 @@ double AGWebEngineProgress(AGWebEngine *engine);
  * leaves a person pressing a dead button, which reads as a bug in the app rather than as the end of the history.
  *
  * The answers are WebKit's own (`webkit_web_view_can_go_back` and its forward twin); nothing is remembered here. */
+/* **NAVIGATION MAY BE SUPPRESSED FOR THE DURATION OF A SELECTION.** WebKit asks its embedder before it follows a link, and
+ * this embedder's answer is "yes" — except while an emulated drag is in flight, because that drag is a series of
+ * SHIFT-CLICKS and a shift-click that lands on a link is a navigation. A drag that crosses a link must not open it; that
+ * was measured as the risk of the emulation before links worked at all, and it is real as soon as they do. The view turns
+ * this on when its drag starts and off when the button is released. */
+void AGWebEngineSetSuppressNavigation(AGWebEngine *engine, int suppressed);
+
 int AGWebEngineCanGoBack(AGWebEngine *engine);
 void AGWebEngineGoBack(AGWebEngine *engine);
 int AGWebEngineCanGoForward(AGWebEngine *engine);

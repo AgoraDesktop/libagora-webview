@@ -123,6 +123,10 @@ struct AGWebEngine {
 	 */
 	uint32_t pressed_buttons;
 
+	/* **SET WHILE A SELECTION DRAG IS RUNNING**, so the policy handler can refuse a link the drag happens to cross — see
+	 * `AGWebEngineSetSuppressNavigation`. Zero means ordinary navigation. */
+	int suppress_navigation;
+
 	/* **THE SIZE IS IN POINTS AND THE FACTOR IS WHAT MAKES PIXELS.** See `AGWebEngineSetDeviceScaleFactor`: WebKit lays
 	 * the page out for these, and paints `points x device_scale` device pixels. */
 	int width;
@@ -619,6 +623,70 @@ static void ag_web_load_changed(WebKitWebView *view, WebKitLoadEvent event, gpoi
 	}
 }
 
+/* **EVERYTHING THE PAGE ASKS FOR IS ALLOWED, UNTIL SOMETHING SAYS OTHERWISE.** This was written believing a missing handler
+ * was why clicks on links did nothing; MEASURED with the handler removed, an ordinary `<a href>` STILL navigates, because
+ * WebKit's default for a navigation action is to allow it. That early "links do not work" was the `buttons` bug: a page
+ * that never sees a click cannot follow a link, and fixing `MouseEvent.buttons` fixed it.
+ *
+ * So what this handler is actually for, in the order of who needs it: **a `target="_blank"` link**, which WebKit reports as
+ * a NEW_WINDOW_ACTION and then IGNORES by default because there is no window to put it in — here it loads in this view, and
+ * that is asserted; **the suppression below**, which has nowhere else to live; and an explicit yes to the `RESPONSE` loads
+ * a page starts itself.
+ *
+ * `NEW_WINDOW_ACTION` is answered by loading in this view rather than being dropped: there are no tabs yet, and a link with
+ * `target="_blank"` that does nothing is worse than one that takes over the window it came from. When tabs arrive, this is
+ * the branch that makes one. `RESPONSE` covers a load the page started itself (a form, a script's redirect).
+ *
+ * AND ONE REFUSAL: **a selection drag must not navigate.** The emulated drag is a sequence of shift-clicks, and a
+ * shift-click that lands on a link would open it — a person selecting a sentence across a link would leave the page. The
+ * view suppresses navigation for the duration of a drag, which is the one case this handler says no. */
+static gboolean ag_web_decide_policy(WebKitWebView *view, WebKitPolicyDecision *decision,
+				     WebKitPolicyDecisionType type, gpointer data)
+{
+	AGWebEngine *engine = data;
+
+	(void)view;
+	if (engine->suppress_navigation) {
+		webkit_policy_decision_ignore(decision);
+		return TRUE;
+	}
+	switch (type) {
+	case WEBKIT_POLICY_DECISION_TYPE_NAVIGATION_ACTION:
+	case WEBKIT_POLICY_DECISION_TYPE_RESPONSE:
+		webkit_policy_decision_use(decision);
+		return TRUE;
+	case WEBKIT_POLICY_DECISION_TYPE_NEW_WINDOW_ACTION: {
+		/* **`use` DOES NOT PUT A NEW-WINDOW ACTION IN THIS VIEW — IT NEEDS A WINDOW, AND THERE ISN'T ONE.** MEASURED: a
+		 * `target="_blank"` link with `webkit_policy_decision_use` did nothing at all, because WebKit got no view to open
+		 * (that is the `create` signal's job, and this embedder creates none). So the request is taken out of the decision
+		 * and loaded HERE, and the decision is dropped. When tabs arrive, this branch opens a tab instead. */
+		WebKitNavigationAction *action;
+		WebKitURIRequest *request;
+		const char *target;
+
+		action = webkit_navigation_policy_decision_get_navigation_action(
+			WEBKIT_NAVIGATION_POLICY_DECISION(decision));
+		request = action != NULL ? webkit_navigation_action_get_request(action) : NULL;
+		target = request != NULL ? webkit_uri_request_get_uri(request) : NULL;
+		if (target != NULL) {
+			webkit_web_view_load_uri(view, target);
+		}
+		webkit_policy_decision_ignore(decision);
+		return TRUE;
+	}
+	default:
+		return FALSE;
+	}
+}
+
+void AGWebEngineSetSuppressNavigation(AGWebEngine *engine, int suppressed)
+{
+	if (engine == NULL) {
+		return;
+	}
+	engine->suppress_navigation = suppressed ? 1 : 0;
+}
+
 static void ag_web_title_changed(GObject *object, GParamSpec *spec, gpointer data)
 {
 	AGWebEngine *engine = data;
@@ -739,6 +807,7 @@ AGWebEngine *AGWebEngineCreateWithOptions(int width, int height, AGWebExport exp
 	}
 	g_signal_connect(engine->view, "load-changed", G_CALLBACK(ag_web_load_changed), engine);
 	g_signal_connect(engine->view, "notify::title", G_CALLBACK(ag_web_title_changed), engine);
+	g_signal_connect(engine->view, "decide-policy", G_CALLBACK(ag_web_decide_policy), engine);
 	/* **THE BACKGROUND IS LEFT ALONE, AND THAT IS THE MEASURED CHOICE.** `webkit_web_view_set_background_color` refuses
 	 * NULL with a `g_return_if_fail` CRITICAL, and its default is already opaque white — which is what a page with no
 	 * background is, and what this seam's caller draws over. Setting it needs a `WebKitColor` built for no gain. */

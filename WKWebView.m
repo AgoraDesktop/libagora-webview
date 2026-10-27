@@ -780,6 +780,7 @@ static BOOL ag_real_drag_enabled(void);
 		_drag_extending = NO;
 		AGWebEnginePointerButton((AGWebEngine *)_engine, (int)(point.x + 0.5), (int)(point.y + 0.5), 0x110u, 0,
 					 AGModifierShift, [self ag_timeForEvent:event]);
+		AGWebEngineSetSuppressNavigation((AGWebEngine *)_engine, 0);
 		return;
 	}
 	[self ag_sendButton:0x110u pressed:NO withEvent:event];
@@ -879,6 +880,11 @@ static BOOL ag_real_drag_enabled(void)
 	_drag_last_x = point.x;
 	_drag_last_y = point.y;
 	_drag_extending = YES;
+	/* **A DRAG MUST NOT FOLLOW THE LINKS IT CROSSES.** The emulation is a run of shift-clicks, and a shift-click that lands
+	 * on a link is a navigation the moment the policy handler above says yes to links (which is what makes a browser a
+	 * browser). Navigation is suppressed for as long as the drag's presses are in flight and restored on the release — see
+	 * `AGWebEngineSetSuppressNavigation` and `webengine-links`, which asserts both halves. */
+	AGWebEngineSetSuppressNavigation((AGWebEngine *)_engine, 1);
 	AGWebEnginePointerButton((AGWebEngine *)_engine, (int)(point.x + 0.5), (int)(point.y + 0.5), 0x110u, 1,
 				 AGModifierShift, [self ag_timeForEvent:event]);
 }

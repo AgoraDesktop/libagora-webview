@@ -351,6 +351,27 @@ comes once at mouse-up, so the steps cannot become clicks.
 WPE's enum is 1 = LEFT, **2 = RIGHT, 3 = MIDDLE** (every other value arrives as LEFT), where this seam had middle and right
 swapped. Found by sending each number to a page that prints `MouseEvent.button`; fixed, with the numbers in the comment.
 
+## Links, and what a policy handler is actually for
+
+Clicking a link now navigates, and `webengine-links` asserts it: two pages on disk, a click, the URI changes, Back returns.
+What that probe also established, at the cost of a wrong comment: **ordinary links never needed a `decide-policy` handler.**
+This file used to say clicks did nothing because none was installed; measured with the handler removed, an `<a href>` still
+navigates, because WebKit's default for a navigation action is to allow it. The early "links do not work" was the
+`MouseEvent.buttons` bug — a page that never sees a click cannot follow a link.
+
+The handler exists for the two things the default cannot do:
+
+- **`target="_blank"`** is a `NEW_WINDOW_ACTION`, and `webkit_policy_decision_use` on one does *nothing* here — measured —
+  because it needs a view to open and this embedder creates none. The handler takes the request out of the decision and
+  loads it in this view; that is the honest single-view answer until tabs exist, and the branch that becomes one.
+- **A selection drag must not follow the links it crosses.** The emulated drag is a run of shift-clicks, so a drag over a
+  link would navigate the moment links work. `AGWebEngineSetSuppressNavigation` covers exactly that window, and the probe
+  checks both halves — the suppressed click stays put, and the same click works again once suppression is lifted (a latch
+  here would leave the browser unable to follow anything after one drag).
+
+Measured, handler disconnected vs connected: the ordinary link passes both times; the `_blank` step and the suppressed
+click fail without it.
+
 ## The demo's toolbar: back, forward, and a URL field
 
 `tools/webview.m` puts an `NSToolbar` on the window with two buttons and an editable `NSTextField`. Nothing about it is a

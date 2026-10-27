@@ -30,6 +30,16 @@ endif()
 set(AGORA_WINDOW_SERVER_BINARY "${CMAKE_CURRENT_SOURCE_DIR}/../../window-server/build/window-server"
     CACHE FILEPATH "window-server's built binary, for the tests that need a compositor of our own")
 
+# **LINKS, AND THE ONE CLICK A DRAG MUST NOT FOLLOW.** Two pages on disk, a click on the link between them, back, and the
+# suppressed click that must stay put — plus the check that suppression is a switch rather than a latch, since a single drag
+# that turned it off for good would leave the browser unable to follow anything.
+add_executable(webengine_links webengine_links.c)
+target_link_libraries(webengine_links PRIVATE WebView)
+
+add_test(NAME webengine-links COMMAND webengine_links)
+set_tests_properties(webengine-links PROPERTIES SKIP_RETURN_CODE 77
+  ENVIRONMENT "${_agora_webview_test_env}")
+
 add_executable(webengine_probe webengine_probe.c)
 target_link_libraries(webengine_probe PRIVATE WebView)
 
