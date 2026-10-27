@@ -33,6 +33,8 @@
 #import <Foundation/NSAutoreleasePool.h>
 #import <Foundation/NSDate.h>
 #import <Foundation/NSRunLoop.h>
+#import <Foundation/NSTimer.h>
+#import <Foundation/NSString.h>
 #import <Foundation/NSURL.h>
 #import <Foundation/NSString.h>
 
@@ -60,6 +62,35 @@ static NSString *const kDefaultPage =
 	 @"<script>window.addEventListener('keydown',function(e){"
 	 @"document.getElementById('band').style.background=e.key=='q'?'#000000':'#008000';});</script>"
 	 @"</body></html>";
+
+/* **THE WINDOW TITLE MIRRORS THE PAGE'S TITLE, WHICH MAKES THE APP ITS OWN DIAGNOSTIC.** A page's title is the only channel
+ * it has to say anything about itself, and a selection count is exactly the kind of thing that is invisible from outside:
+ * when a click fails to clear a selection, this says whether the PAGE still has it (the click never arrived) or the page has
+ * 0 and the PICTURE is stale (a repaint bug). Those need opposite fixes, and the difference costs a look at the title bar. */
+@interface AGTitleMirror : NSObject
+{
+@public
+	WKWebView *view;
+	NSWindow *window;
+}
+- (void)tick:(NSTimer *)timer;
+@end
+
+@implementation AGTitleMirror
+- (void)tick:(NSTimer *)timer
+{
+	NSString *page = [view title];
+
+	(void)timer;
+	if (page != nil && ![[window title] isEqualToString:page]) {
+		/* **LOGGED AS WELL AS SHOWN**, so a person using the demo does not have to transcribe what happened: the page's own
+		 * answer about itself — a selection count, say — lands in the demo's log where it can be read afterwards. */
+		fprintf(stderr, "webview: the page says \"%s\"\n", [page UTF8String]);
+		fflush(stderr);
+		[window setTitle:page];
+	}
+}
+@end
 
 @interface AGWebViewDelegate : NSObject <WKNavigationDelegate>
 {
@@ -172,6 +203,17 @@ int main(int argc, char **argv)
 	[view setNavigationDelegate:delegate];
 	[window setContentView:view];
 	[window makeKeyAndOrderFront:nil];
+	{
+		AGTitleMirror *mirror = [[AGTitleMirror alloc] init];
+
+		mirror->view = view;
+		mirror->window = window;
+		[NSTimer scheduledTimerWithTimeInterval:0.2
+						 target:mirror
+					       selector:@selector(tick:)
+					       userInfo:nil
+						repeats:YES];
+	}
 	if (getenv("WK_WEBVIEW_DIAG") != NULL) {
 		fprintf(stderr, "  DIAG frame: %.0fx%.0f at (%.0f,%.0f), visible %d, content %.0fx%.0f\n",
 			[window frame].size.width, [window frame].size.height, [window frame].origin.x, [window frame].origin.y,

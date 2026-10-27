@@ -345,6 +345,120 @@ int main(void)
 		check(selected < 60, "and it selected the span that was dragged over, not the whole paragraph");
 	}
 
+	/* 2c. **A PLAIN CLICK OUTSIDE THE SELECTION CLEARS IT.** Reported from the demo: after a drag, one click elsewhere left the
+	 * selection in place. A click that lands anywhere else is the ordinary way to say "I am done with that", and the likely
+	 * cause is a press our drag emulation never released — a held SHIFT makes every later click an extension rather than a
+	 * new selection. Asserted as the page's own count going back to zero. */
+	{
+		int cleared = -1;
+		int tries;
+		NSEvent *click;
+
+		/* **RIGHT AFTER THE DRAG**, inside the double-click interval: a click there is the case a person makes when they
+		 * drag and then click somewhere else to be done with it. */
+		click = [NSEvent mouseEventWithType:NSLeftMouseDown
+					  location:NSMakePoint(260.0, (CGFloat)(H - 150))
+				     modifierFlags:0
+					 timestamp:3.52
+				      windowNumber:0
+					   context:nil
+				       eventNumber:30
+					clickCount:1
+					  pressure:0.0f];
+		[view mouseDown:click];
+		pump(0.05);
+		click = [NSEvent mouseEventWithType:NSLeftMouseUp
+					  location:NSMakePoint(260.0, (CGFloat)(H - 150))
+				     modifierFlags:0
+					 timestamp:3.55
+				      windowNumber:0
+					   context:nil
+				       eventNumber:31
+					clickCount:1
+					  pressure:0.0f];
+		[view mouseUp:click];
+		for (tries = 0; tries < 20 && cleared != 0; tries++) {
+			pump(0.05);
+			if ([view title] != nil) {
+				const char *title = [[view title] UTF8String];
+				const char *sel = title != NULL ? strstr(title, "sel=") : NULL;
+
+				cleared = (sel != NULL) ? atoi(sel + 4) : -1;
+			}
+		}
+		printf("appkit_webview: after a click elsewhere the page's selection is %d\n", cleared);
+		check(cleared == 0, "a click outside the selection clears it");
+
+		/* **AND THE SAME WHEN THE DRAG'S RELEASE WAS LOST.** A release outside the window never reaches this view, which
+		 * leaves the emulation's shift-press held — and a held SHIFT turns every later click into an extension instead of a
+		 * new selection. That is the shape of the report: a drag, then a click, and the selection will not go away. */
+		event = [NSEvent mouseEventWithType:NSLeftMouseDown
+					   location:NSMakePoint(20.0, (CGFloat)(H - 88))
+				      modifierFlags:0
+					  timestamp:4.0
+				       windowNumber:0
+					    context:nil
+					eventNumber:40
+					 clickCount:1
+					   pressure:0.0f];
+		[view mouseDown:event];
+		{
+			int drag;
+
+			for (drag = 1; drag <= 8; drag++) {
+				event = [NSEvent mouseEventWithType:NSLeftMouseDragged
+							   location:NSMakePoint(20.0 + (CGFloat)drag * 20.0, (CGFloat)(H - 88))
+						      modifierFlags:0
+							  timestamp:4.0 + 0.01 * drag
+						       windowNumber:0
+							    context:nil
+							eventNumber:41 + drag
+							 clickCount:1
+							   pressure:0.0f];
+				[view mouseDragged:event];
+				pump(0.05);
+			}
+		}
+		/* no mouseUp: the release happened outside the view */
+		click = [NSEvent mouseEventWithType:NSLeftMouseDown
+					  location:NSMakePoint(260.0, (CGFloat)(H - 150))
+				     modifierFlags:0
+					 timestamp:4.5
+				      windowNumber:0
+					   context:nil
+				       eventNumber:60
+					clickCount:1
+					  pressure:0.0f];
+		[view mouseDown:click];
+		pump(0.05);
+		click = [NSEvent mouseEventWithType:NSLeftMouseUp
+					  location:NSMakePoint(260.0, (CGFloat)(H - 150))
+				     modifierFlags:0
+					 timestamp:4.55
+				      windowNumber:0
+					   context:nil
+				       eventNumber:61
+					clickCount:1
+					  pressure:0.0f];
+		[view mouseUp:click];
+		{
+			int tries2;
+			int cleared2 = -1;
+
+			for (tries2 = 0; tries2 < 20 && cleared2 != 0; tries2++) {
+				pump(0.05);
+				if ([view title] != nil) {
+					const char *title = [[view title] UTF8String];
+					const char *sel = title != NULL ? strstr(title, "sel=") : NULL;
+
+					cleared2 = (sel != NULL) ? atoi(sel + 4) : -1;
+				}
+			}
+			printf("appkit_webview: after a lost release, a click leaves %d selected\n", cleared2);
+			check(cleared2 == 0, "a click clears the selection even when a drag's release was lost");
+		}
+	}
+
 	/* 3. THE WHEEL, IN APPKIT'S SIGN. `deltaY` is positive when a person scrolls UP, and the cyan band begins 280 points
 	 * down the page — 80 points below the fold — so the scroll has to be more than one notch. Four events of -60 are sent
 	 * with the run loop pumped between them, because WebKit's scroll is smooth and a burst with no loop between is a
