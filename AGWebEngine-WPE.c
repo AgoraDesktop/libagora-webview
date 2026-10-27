@@ -78,6 +78,8 @@ void wl_shm_buffer_end_access(struct wl_shm_buffer *buffer);
 /* WL_SHM_FORMAT_ARGB8888, the only format this host accepts; anything else is refused rather than mis-coloured. */
 #define AG_WL_SHM_FORMAT_ARGB8888 0u
 
+static void ag_web_push_geometry(AGWebEngine *engine);
+
 struct AGWebEngine {
 	AGWebEngineCallbacks callbacks;
 	void *context;
@@ -106,8 +108,11 @@ struct AGWebEngine {
 	 * keeps the last composited frame, so this flag says "there is something to put into the next destination". */
 	int frame_pending;
 
+	/* **THE SIZE IS IN POINTS AND THE FACTOR IS WHAT MAKES PIXELS.** See `AGWebEngineSetDeviceScaleFactor`: WebKit lays
+	 * the page out for these, and paints `points x device_scale` device pixels. */
 	int width;
 	int height;
+	double device_scale;
 	uint32_t *frame;	/* the newest exported frame, 0x00RRGGBB, top-down */
 	int frame_width;
 	int frame_height;
@@ -630,6 +635,7 @@ AGWebEngine *AGWebEngineCreateWithOptions(int width, int height, AGWebExport exp
 	}
 	engine->context = context;
 	engine->present_fd = -1;
+	engine->device_scale = 1.0;
 	engine->width = width > 0 ? width : 1;
 	engine->height = height > 0 ? height : 1;
 
@@ -690,6 +696,7 @@ AGWebEngine *AGWebEngineCreateWithOptions(int width, int height, AGWebExport exp
 		return NULL;
 	}
 	engine->backend = wpe_view_backend_exportable_fdo_get_view_backend(engine->exportable);
+	ag_web_push_geometry(engine);
 
 	view_backend = webkit_web_view_backend_new(engine->backend, NULL, NULL);
 	engine->view = webkit_web_view_new(view_backend);
@@ -778,6 +785,17 @@ void AGWebEngineLoadHTML(AGWebEngine *engine, const char *html, const char *base
 	webkit_web_view_load_html(engine->view, html, base_uri);
 }
 
+/* **THE TWO NUMBERS WEBKIT NEEDS ARE PUSHED TOGETHER**, because each is meaningless without the other: a size in points
+ * says how much page there is, and the factor says how many pixels a point owns. */
+static void ag_web_push_geometry(AGWebEngine *engine)
+{
+	if (engine == NULL || engine->backend == NULL) {
+		return;
+	}
+	wpe_view_backend_dispatch_set_device_scale_factor(engine->backend, (float)engine->device_scale);
+	wpe_view_backend_dispatch_set_size(engine->backend, (uint32_t)engine->width, (uint32_t)engine->height);
+}
+
 void AGWebEngineSetSize(AGWebEngine *engine, int width, int height)
 {
 	if (engine == NULL || width <= 0 || height <= 0) {
@@ -788,7 +806,16 @@ void AGWebEngineSetSize(AGWebEngine *engine, int width, int height)
 	/* **THE VIEW BACKEND IS TOLD, AND IT IS THE ONLY WAY WEBKIT HEARS ABOUT A RESIZE.** The page re-lays out for the
 	 * new viewport and paints when it is ready; a caller that resized only its own buffer would stretch the old
 	 * layout. */
-	wpe_view_backend_dispatch_set_size(engine->backend, (uint32_t)width, (uint32_t)height);
+	ag_web_push_geometry(engine);
+}
+
+void AGWebEngineSetDeviceScaleFactor(AGWebEngine *engine, double factor)
+{
+	if (engine == NULL) {
+		return;
+	}
+	engine->device_scale = (factor > 0.0) ? factor : 1.0;
+	ag_web_push_geometry(engine);
 }
 
 const char *AGWebEngineExportPath(AGWebEngine *engine)

@@ -223,19 +223,23 @@ cmake --build build -j"$(nproc)" && ctest --test-dir build --output-on-failure
 `appkit-readme-refs`-style guards are not here yet: this document names no test files, and the two tests are registered
 by name.
 
-## What is not here yet, in the order it is worth doing
+## The two numbers a page is laid out with
 
-1. **The device scale factor** (`wpe_view_backend_dispatch_set_device_scale_factor`), so a page renders at an output's own
-   device pixels instead of being scaled from points: the window probe sizes the engine to the buffer and that is right,
-   but the engine never tells WebKit the factor itself, so its text layout is at 1x scaled up.
-2. **A screenshot of a window needs the compositor stopped while the window is still up.** MEASURED, the hard way: an
-   application given `--seconds 3` had already exited when the server was signalled, so the frame it wrote was an empty
-   desktop — and that looked exactly like "the window is never composited at scale 1.0", which is what I recorded here
-   before checking. `demo/agora-webview.sh` now runs a capture in the background and stops the compositor first
-   (`AGORA_CAPTURE_AFTER`, 8 seconds by default), and `webview-app`'s runner always did.
-3. **Resize under load**, which nothing has driven yet: `-setFrameSize:` reaches `AGWebEngineSetSize`, and what a resize
-   does to a *loading* page has not been measured.
+**Sizes and points are in POINTS; the frame that comes back is in DEVICE PIXELS.** `AGWebEngineSetDeviceScaleFactor` is what
+turns one into the other, and it is a door of its own because the two answer different questions: how much page there is,
+and how many pixels each of its points owns. MEASURED, in `webengine-scale`:
 
-## Licence
+- a 400x300 engine at factor 2 hands back an **800x600** frame whose 40-POINT band is **80 device rows** — the page laid out
+  for 400 CSS pixels and painted at 800, which is the difference between sharp text and text resampled once;
+- an engine resized **while its page is still loading**, 640x480 -> 480x360 -> 320x200, ends with a **320x200** frame and a
+  band of **40 rows**. Forty, not seventeen: seventeen is what a 640x480 layout rescaled into 320x200 would give, so the
+  band's height is the proof that the page re-laid out rather than being stretched.
 
-LGPL-3.0-or-later, like every library in this federation. The engine it hosts is the system's, under its own licences.
+`WKWebView` passes its window's `-userSpaceScaleFactor` and its own bounds in points, so a page inside an AppKit window is
+rendered at the output's own resolution — and its pointer conversion is in points too, because a click at CSS pixel (160,
+60) is the same place at 1x and at 2x.
+
+**A warning from this pass, since it cost an hour here:** both claims first "failed" because the test sampled once, right
+after the load finished, when the frame can still be the blank page. Polling for the page's own colour is what made them
+pass — and it also showed that a geometry push repeated when a page commits changes nothing, so that defensive code was
+removed rather than kept with a comment claiming it had fixed something.

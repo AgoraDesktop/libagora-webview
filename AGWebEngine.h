@@ -98,7 +98,7 @@ typedef enum {
 	AGWebExportEGLPresent = 2
 } AGWebExport;
 
-/* Create an engine sized in DEVICE pixels, with nothing loaded (the page is blank white, which is what a browser shows).
+/* Create an engine sized in POINTS, with nothing loaded (the page is blank white, which is what a browser shows).
  * `callbacks` may be NULL and `context` is passed back untouched. Returns NULL when the machine cannot start the engine
  * at all — no `libWPEBackend-fdo`, no WebKit — and the reason is printed to stderr, because a web view that silently
  * never paints is worse than one that refuses. */
@@ -145,6 +145,14 @@ int AGWebEngineIterate(AGWebEngine *engine);
 void AGWebEngineLoadURI(AGWebEngine *engine, const char *uri);
 void AGWebEngineLoadHTML(AGWebEngine *engine, const char *html, const char *base_uri);
 
+/* **THE OUTPUT'S DEVICE PIXELS PER POINT, WHICH IS WHAT MAKES TEXT SHARP.** Without it the engine renders at 1x and the
+ * view draws that bitmap into a 1.332x surface, so every glyph is resampled: correct, and soft. With it, WebKit lays the
+ * page out for the same number of POINTS and paints into that many more pixels. `factor <= 0` returns it to 1.
+ *
+ * It is a separate door from the size because the two answer different questions — how much page there is, and how many
+ * pixels each of its points owns — and a caller may set either alone. */
+void AGWebEngineSetDeviceScaleFactor(AGWebEngine *engine, double factor);
+
 /* **A RESIZE IS THE ENGINE'S TO RELAYOUT**, which is why it is a door and not a property: WebKit re-lays out the page
  * for the new viewport and paints when it is ready, and a caller that only resized its own buffer would keep drawing
  * the old layout stretched. Sizes are DEVICE pixels — `round(points * AGWindowServerScale(server))`, the number a
@@ -160,7 +168,13 @@ double AGWebEngineProgress(AGWebEngine *engine);
 /* ================================================================================================================
  * INPUT — THE OTHER HALF OF BEING A VIEW
  *
- * **EVERY COORDINATE HERE IS IN THE ENGINE'S OWN DEVICE PIXELS, WITH (0,0) AT THE PAGE'S TOP LEFT**, which is the same
+ * **SIZES AND POINTS ARE IN POINTS — CSS PIXELS — AND THE FRAME THAT COMES BACK IS IN DEVICE PIXELS.** A view is measured
+ * in points on every display, and `AGWebEngineSetDeviceScaleFactor` is what turns those into the pixels the engine
+ * renders: at 2.0 a 400x300 engine paints an 800x600 frame, its text is laid out for 400 CSS pixels and drawn at 800, and
+ * `AGWebEngineFrameSize` answers 800x600 because that is what a caller holding a buffer needs. The default factor is 1,
+ * where the two are the same number.
+ *
+ * **EVERY COORDINATE HERE IS IN THE ENGINE'S OWN POINTS, WITH (0,0) AT THE PAGE'S TOP LEFT**, which is the same
  * space `AGWebEngineDraw` writes. That is not the AppKit's space: an `NSEvent` arrives in points, so the view that
  * forwards one multiplies by the buffer scale before calling these doors — the same number `AGWindowBeginFrameSized`
  * answers with. A caller that skips that step sends every click to the wrong place on a fractional display, which is
@@ -199,8 +213,9 @@ void AGWebEngineScroll(AGWebEngine *engine, int x, int y, uint32_t axis, double 
 void AGWebEngineKey(AGWebEngine *engine, uint32_t keysym, uint32_t hardware_keycode, uint32_t modifiers, int pressed,
 		    uint32_t time_ms);
 
-/* The frame's size in device pixels, which is the size it was last asked to be — a caller's own buffer questions
- * answered without guessing. */
+/* **THE FRAME'S SIZE IN DEVICE PIXELS**, which is the size the last exported frame actually was: `points x factor`, and
+ * the number a caller allocating a buffer has to know. It is not the size the engine was asked for once a factor is set —
+ * that is in points, and asking this door is how a caller sees the difference. */
 void AGWebEngineFrameSize(AGWebEngine *engine, int *width, int *height);
 
 /* **DRAW THE NEWEST FRAME INTO THE CALLER'S PIXELS.** `dst` is `0x00RRGGBB` with a TOP-DOWN origin and

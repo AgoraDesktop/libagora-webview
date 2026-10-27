@@ -92,6 +92,16 @@ add_test(NAME webview-app
 set_tests_properties(webview-app PROPERTIES SKIP_RETURN_CODE 77
   ENVIRONMENT "${_agora_webview_test_env}")
 
+# **THE TWO NUMBERS A PAGE IS LAID OUT WITH**: the device scale factor (points -> pixels), and a resize that happens while
+# the page is still loading. Both are asserted by the page's own geometry: a 40-point band is 80 device rows at factor 2,
+# and 40 rows — not 17 — after a resize to 320x200, because 17 is what stretching a 640x480 layout would give.
+add_executable(webengine_scale webengine_scale.c)
+target_link_libraries(webengine_scale PRIVATE WebView)
+
+add_test(NAME webengine-scale COMMAND webengine_scale)
+set_tests_properties(webengine-scale PROPERTIES SKIP_RETURN_CODE 77
+  ENVIRONMENT "${_agora_webview_test_env}")
+
 add_test(NAME webengine-page
   COMMAND "${CMAKE_CURRENT_SOURCE_DIR}/run-webengine.sh"
           "$<TARGET_FILE:webengine_probe>" "${AGORA_WINDOW_SERVER_BINARY}")

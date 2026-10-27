@@ -176,8 +176,9 @@ static void ag_view_title_changed(void *context, AGWebEngine *engine, const char
 	{
 		AGWebEngineCallbacks callbacks;
 		NSRect bounds = [self bounds];
-		int width = (int)(bounds.size.width * _scale + 0.5);
-		int height = (int)(bounds.size.height * _scale + 0.5);
+		/* **POINTS, NOT PIXELS**: the factor is what turns them into pixels, and it is handed over on the next line. */
+		int width = (int)(bounds.size.width + 0.5);
+		int height = (int)(bounds.size.height + 0.5);
 
 		/* **MADE AT THE VIEW'S SIZE, NOT AT 1x1 AND THEN TOLD.** MEASURED: an engine created 1x1 and resized to the
 		 * view's size before its first load rendered a 1x1 page — a single pixel, drawn into a 320x200 view — because the
@@ -193,6 +194,12 @@ static void ag_view_title_changed(void *context, AGWebEngine *engine, const char
 		callbacks.title_changed = ag_view_title_changed;
 		callbacks.damaged = ag_view_damaged;
 		_engine = AGWebEngineCreate(width, height, &callbacks, self);
+		if (_engine != NULL) {
+			/* **AND THE OUTPUT'S OWN SCALE, SO THE PAGE IS RENDERED AT IT RATHER THAN RESAMPLED UP TO IT.** MEASURED on this
+			 * machine's 1.332 panel: without this the engine painted 640x480 and the view drew that into an 852x639
+			 * surface, which is correct and visibly soft — every glyph resampled once. */
+			AGWebEngineSetDeviceScaleFactor((AGWebEngine *)_engine, _scale);
+		}
 	}
 	if (_engine == NULL) {
 		return;
@@ -231,8 +238,8 @@ static void ag_view_title_changed(void *context, AGWebEngine *engine, const char
 		return;
 	}
 	bounds = [self bounds];
-	width = (int)(bounds.size.width * _scale + 0.5);
-	height = (int)(bounds.size.height * _scale + 0.5);
+	width = (int)(bounds.size.width + 0.5);
+	height = (int)(bounds.size.height + 0.5);
 	if (width < 1) {
 		width = 1;
 	}
@@ -240,6 +247,7 @@ static void ag_view_title_changed(void *context, AGWebEngine *engine, const char
 		height = 1;
 	}
 	AGWebEngineSetSize((AGWebEngine *)_engine, width, height);
+	AGWebEngineSetDeviceScaleFactor((AGWebEngine *)_engine, _scale);
 }
 
 - (void)ag_pump:(NSTimer *)timer
@@ -595,7 +603,10 @@ static void ag_view_title_changed(void *context, AGWebEngine *engine, const char
 {
 	NSPoint point = [self convertPoint:[event locationInWindow] fromView:nil];
 
-	return NSMakePoint(point.x * _scale, ([self bounds].size.height - point.y) * _scale);
+	/* **AND THE INPUT IS IN POINTS, BECAUSE THAT IS WHAT THE ENGINE SPEAKS NOW.** The device factor is WebKit's business:
+	 * a pointer at CSS pixel (160, 60) is the same place whether the page is rendered at 1x or at 2x, and a view that
+	 * multiplied here would put every click at 1.332 times the distance on this machine's panel. */
+	return NSMakePoint(point.x, [self bounds].size.height - point.y);
 }
 
 - (uint32_t)ag_timeForEvent:(NSEvent *)event
