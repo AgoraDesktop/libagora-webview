@@ -732,6 +732,8 @@ static void ag_view_title_changed(void *context, AGWebEngine *engine, const char
 				 [self ag_timeForEvent:event]);
 }
 
+static BOOL ag_real_drag_enabled(void);
+
 - (void)mouseDown:(NSEvent *)event
 {
 	NSPoint point = [self ag_enginePointForEvent:event];
@@ -745,7 +747,7 @@ static void ag_view_title_changed(void *context, AGWebEngine *engine, const char
 
 - (void)mouseUp:(NSEvent *)event
 {
-	if (_drag_extending && _engine != NULL) {
+	if (_drag_extending && _engine != NULL && !ag_real_drag_enabled()) {
 		/* **THE RELEASE THAT ENDS THE DRAG, AND IT IS A SHIFT ONE.** The drag's extension is a shift-press per step and no
 		 * release until here, so this balances it — a release in the middle would turn each step into a CLICK, and three
 		 * clicks at nearly one place are a paragraph selection. */
@@ -769,6 +771,26 @@ static void ag_view_title_changed(void *context, AGWebEngine *engine, const char
 	[self ag_sendButton:0x112u pressed:NO withEvent:event];
 }
 
+/* **WHETHER THIS WEBKIT CAN SELECT BY DRAGGING IS NOT SOMETHING IT WILL SAY AT RUNTIME**, so the embedder says it. `-DENABLE_DRAG_SUPPORT=ON`
+ * is a compile-time choice of the port, and the two obvious runtime probes are both useless — MEASURED: `typeof DragEvent`
+ * is "function" in a build with drag support OFF as well as ON, so the IDL is not gated by that option, and no settings
+ * object exposes it either. The honest door is an environment variable set by whoever chose the library: the Agora demo
+ * sets `AGWEBVIEW_REAL_DRAG=1` when it puts a locally built WebKit (which has the option ON) on `LD_LIBRARY_PATH`, and
+ * the AppKit's own tests leave it unset and therefore exercise the emulation every build has. */
+static BOOL ag_real_drag_enabled(void)
+{
+	static int decided = 0;
+	static BOOL enabled = NO;
+
+	if (!decided) {
+		const char *value = getenv("AGWEBVIEW_REAL_DRAG");
+
+		enabled = (value != NULL && value[0] == '1' && value[1] == '\0') ? YES : NO;
+		decided = 1;
+	}
+	return enabled;
+}
+
 /* **A DRAG SELECTS TEXT BY BEING A SHIFT-CLICK, BECAUSE THIS WEBKIT BUILD CANNOT DO IT ANY OTHER WAY.** Not a bug in this
  * seam and not a WebKit bug either — a BUILD OPTION. WebKit 2.48's `Source/cmake/WebKitFeatures.cmake` defines
  * `ENABLE_DRAG_SUPPORT` as PRIVATE **OFF**, and its own description names exactly what that costs: "Toggle support of drag
@@ -782,9 +804,14 @@ static void ag_view_title_changed(void *context, AGWebEngine *engine, const char
  * intact and only the drag half is missing. Setting `MouseEvent.buttons` did not change that (see the engine's
  * `pressed_buttons`); it fixed a real bug of its own, drag handlers and drag-scrolling, but not this one.
  *
- * So selection is extended the classic way: the press sets the anchor, and a SHIFT-modified click moves the extent.
- * Building WebKit with `-DENABLE_DRAG_SUPPORT=ON` would make the natural path available — that is the change to make if a
- * system library ever ships with it — but nothing here should depend on it.
+ * So selection is extended the classic way: the press sets the anchor, and a SHIFT-modified click moves the extent. That
+ * works on EVERY build, which is why it is the default.
+ *
+ * WITH A LOCALLY BUILT WEBKIT (`ENABLE_DRAG_SUPPORT=ON`, see `~/Development/wpewebkit`) the natural path exists and is
+ * better: MEASURED on 2.54.2 built that way, the same press-motion-release drag that selected 0 characters on the system
+ * library selects 37, step by step (29, 33, 37), because a real drag is what the editor and the page both expect. That
+ * path is taken only when `AGWEBVIEW_REAL_DRAG=1` says the library supports it — a drag that is sent as motion to a build
+ * without drag support selects NOTHING, so guessing here would trade a working selection for a broken one.
  *
  * THE RISK WAS LINKS, and it was measured rather than assumed: a shift-click on a link in this engine does NOT navigate
  * (nor does a plain click — no navigation policy is installed yet), so a drag that crosses a link cannot open one. When
@@ -801,6 +828,13 @@ static void ag_view_title_changed(void *context, AGWebEngine *engine, const char
 	now = ag_now_ms();
 	if (now - _last_drag_extend_ms < 16.0) {
 		return;			/* a drag is 60 events a second; the page needs a few */
+	}
+	if (ag_real_drag_enabled()) {
+		/* **THE NATURAL DRAG: MOTION ONLY.** The press is already down and the engine carries the held button in
+		 * `modifiers`, so this is what a browser sends — and it is all WebKit needs to extend its own selection. */
+		_last_drag_extend_ms = now;
+		[self mouseMoved:event];
+		return;
 	}
 	point = [self ag_enginePointForEvent:event];
 	/* **SIX POINTS OF TRAVEL BEFORE ANOTHER PRESS, AND THAT IS THE WHOLE DIFFERENCE BETWEEN A SELECTION AND A PARAGRAPH.**

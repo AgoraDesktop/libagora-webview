@@ -10,8 +10,19 @@
 # asserts a number the engine itself reported, because an engine reporting its own progress is not evidence that
 # anything was drawn.
 
-set(_agora_webview_test_env
-    "LD_LIBRARY_PATH=$<TARGET_FILE_DIR:WebView>:$<TARGET_FILE_DIR:AgoraApp::App>")
+# **A LOCALLY BUILT WPE WEBKIT GOES IN FRONT, WHEN ONE IS NAMED.** `AGORA_WPE_PREFIX` is the install of a WebKit fork (see
+# `~/Development/wpewebkit`) that has `ENABLE_DRAG_SUPPORT=ON`. Naming it does two things: the library path puts it before
+# everything else, and `AGWEBVIEW_REAL_DRAG=1` tells the view to send a real drag instead of the shift-click emulation that
+# a stock build needs. MEASURED: the same drag selects 29 characters either way, and 0 if the variable is set while the
+# system library is loaded — so the two have to travel together, which is exactly what this does.
+set(_agora_webview_test_lib_path "$<TARGET_FILE_DIR:WebView>:$<TARGET_FILE_DIR:AgoraApp::App>")
+if (AGORA_WPE_PREFIX)
+    set(_agora_webview_test_lib_path "${_agora_webview_test_lib_path}:${AGORA_WPE_PREFIX}/lib")
+endif()
+set(_agora_webview_test_env "LD_LIBRARY_PATH=${_agora_webview_test_lib_path}")
+if (AGORA_WPE_PREFIX)
+    list(APPEND _agora_webview_test_env "AGWEBVIEW_REAL_DRAG=1")
+endif()
 
 # **A COMPONENT'S TESTS MUST NOT NEED A SIBLING'S BUILD TO BE PRESENT**, so the window server is a path that may not
 # exist and the runner SKIPS (77) when it does not. Declared as a cache entry above its first use, which is the mistake

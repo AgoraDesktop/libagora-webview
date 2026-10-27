@@ -18,6 +18,11 @@
 #
 #===----------------------------------------------------------------------===#
 
+# **A LOCALLY BUILT WPE WEBKIT, FOR THE ONE FEATURE THE DISTRO SWITCHES OFF.** Empty means "the system one", which is the
+# normal case. Point it at a fork built with `ENABLE_DRAG_SUPPORT=ON` (see `~/Development/wpewebkit`) and the tests — and
+# the demo, through the same variable — use that library and let the view send real drags instead of emulating them.
+set(AGORA_WPE_PREFIX "" CACHE PATH "Install prefix of a locally built WPE WebKit; empty uses the system one")
+
 cmake_minimum_required(VERSION 3.24)
 
 project(AgoraWebView LANGUAGES C OBJC)

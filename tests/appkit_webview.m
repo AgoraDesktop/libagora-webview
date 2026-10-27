@@ -341,7 +341,7 @@ int main(void)
 		 * correct selection is a few dozen characters. MEASURED, the first implementation selected the WHOLE PARAGRAPH —
 		 * presses one or two pixels apart counted as a triple click — and a test that only asked "is anything selected"
 		 * passed it. */
-		check(selected > 0, "a pointer drag selected text (emulated as shift-presses from the anchor)");
+		check(selected > 0, "a pointer drag selected text (shift-presses, or a real drag when the library has it)");
 		check(selected < 60, "and it selected the span that was dragged over, not the whole paragraph");
 	}
 

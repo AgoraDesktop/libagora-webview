@@ -307,6 +307,25 @@ drag's first motion fires `selectstart`. The press half of the path is intact; o
 So selection is extended the classic way: the press sets the anchor and a **SHIFT-modified click moves the extent**. A
 WebKit built with `-DENABLE_DRAG_SUPPORT=ON` would let the natural path work; nothing here depends on that.
 
+### A local WebKit can do it properly
+
+`~/Development/wpewebkit` builds WPE WebKit 2.54.2 with `ENABLE_DRAG_SUPPORT=ON` (see its `agora/README.md`). Naming that
+install does two things that must happen together:
+
+```sh
+cmake -S . -B build -DAGORA_WPE_PREFIX=~/Development/wpewebkit/agora/prefix   # tests use it too
+AGORA_WPE_PREFIX=~/Development/wpewebkit/agora/prefix demo/agora-webview.sh 1280x720 https://example.com
+```
+
+The library path puts the fork first and `AGWEBVIEW_REAL_DRAG=1` switches the view from shift-clicks to a real drag.
+MEASURED: that drag selects **29** characters on the fork, the emulation selects **29** on both, and a real drag sent to
+the system library selects **0** — so the variable and the library have to travel together, and the demo script and the
+test environment both set both.
+
+Why an environment variable rather than a probe: the port offers no runtime answer. `typeof DragEvent` is "function" in
+a build with drag support OFF as well as ON (measured), and no settings object exposes the flag, so asking WebKit would
+be guessing.
+
 ### A double click does select the word
 
 WebKit counts clicks itself — `clickCount()` in the same `WebEventFactory.cpp` compares time and distance (500 ms, 5 px)
