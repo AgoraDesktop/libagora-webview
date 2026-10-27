@@ -268,6 +268,13 @@ static void ag_view_title_changed(void *context, AGWebEngine *engine, const char
 		fprintf(stderr, "  DIAG geometry: %dx%d points at scale %.3f (was %dx%d at %.3f)\n", width, height,
 			(double)scale, _pushed_points_width, _pushed_points_height, _pushed_scale);
 	}
+	{
+		struct timespec now;
+
+		clock_gettime(CLOCK_MONOTONIC, &now);
+		_geometry_changed_ms = now.tv_sec * 1000.0 + now.tv_nsec / 1e6;
+		_geometry_answered_ms = 0.0;
+	}
 	_pushed_points_width = width;
 	_pushed_points_height = height;
 	_pushed_scale = (double)scale;
@@ -560,6 +567,19 @@ static void ag_view_title_changed(void *context, AGWebEngine *engine, const char
 	 * the FIRST frame it ever saw, for ever. MEASURED as a page whose load painted nothing but whose hover also painted
 	 * nothing, because neither frame was ever copied. */
 	AGWebEngineDraw((AGWebEngine *)_engine, (uint32_t *)_pixels, width * 4, width, height);
+	if (_geometry_answered_ms == 0.0 && _geometry_changed_ms > 0.0) {
+		struct timespec now;
+		double expected = (_pushed_scale > 0.0) ? _pushed_scale : 1.0;
+
+		clock_gettime(CLOCK_MONOTONIC, &now);
+		if (width == (int)((double)_pushed_points_width * expected + 0.5)) {
+			_geometry_answered_ms = now.tv_sec * 1000.0 + now.tv_nsec / 1e6;
+			if (getenv("WK_WEBVIEW_DIAG") != NULL) {
+				fprintf(stderr, "  DIAG reflow: %.1f ms from the geometry change to a frame at it\n",
+					_geometry_answered_ms - _geometry_changed_ms);
+			}
+		}
+	}
 	for (y = 0; y < width * height; y++) {
 		_pixels[y * 4u + 3u] = 0xFF;
 	}

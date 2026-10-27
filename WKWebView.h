@@ -77,6 +77,10 @@ NS_ASSUME_NONNULL_BEGIN
 	CGFloat _scale;
 	/* **WHAT HAS ACTUALLY BEEN PUSHED TO THE ENGINE**, so the geometry can be re-derived cheaply on every turn and
 	 * pushed only when it really changed — see `-ag_syncGeometry`. */
+	/* **WHEN THE GEOMETRY LAST CHANGED AND WHEN A FRAME AT THAT GEOMETRY FIRST ARRIVED**, so the delay a person feels
+	 * during a resize is a number rather than an impression. */
+	double _geometry_changed_ms;
+	double _geometry_answered_ms;
 	int _pushed_points_width;
 	int _pushed_points_height;
 	double _pushed_scale;

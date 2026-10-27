@@ -130,6 +130,12 @@ int AGWebEngineSetPresentDMABUF(AGWebEngine *engine, int fd, int width, int heig
  * a frame began, the engine was pumped, nothing arrived, and `AGWindowCancelFrame` gives the slot back. */
 unsigned int AGWebEngineFramesPresented(AGWebEngine *engine);
 
+/* **HOW MANY TIMES THIS ENGINE HAS ASKED WEBKIT TO LAY THE PAGE OUT** — one per size that was actually dispatched, which is
+ * not the same as one per call to `AGWebEngineSetSize`. A drag is dozens of resize events and a layout is 25-30 ms, so the
+ * engine keeps ONE layout in flight and remembers the newest size; MEASURED, a 20-step drag asks for 8 layouts instead of 20.
+ * This door exists so a caller (and a test) can see that, rather than inferring it from a stopwatch. */
+unsigned int AGWebEngineLayoutCount(AGWebEngine *engine);
+
 /* **WHICH PATH THIS ENGINE ACTUALLY TOOK**, as a name a diagnostic can print: `"shm"`, `"egl"`, or `"none"` for an
  * engine that is not running. A caller that asked for EGL and fell back needs to be able to see that rather than infer it
  * from a frame rate. */

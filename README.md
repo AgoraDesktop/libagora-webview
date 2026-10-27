@@ -247,6 +247,24 @@ cmake --build build -j"$(nproc)" && ctest --test-dir build --output-on-failure
 `appkit-readme-refs`-style guards are not here yet: this document names no test files, and the two tests are registered
 by name.
 
+## How long a reflow takes, and what did not help
+
+A resize has to wait for WebKit to lay the page out again, and that is the whole of the delay. MEASURED on this machine with
+a document of a few thousand points: **median ~20 ms, 26-35 ms immediately after a drag**, and the frame copy the seam does
+per frame is 0.36 ms at 900x700 — an order of magnitude less than the layout, so our side is not where the time goes.
+
+Two things were tried and **both measured inside the noise**, so neither shipped:
+
+- **Coalescing resizes** (one layout in flight, newest size wins): 20 resize events asked for 19 layouts anyway, because
+  WebKit answers a size change with a frame at the new size quickly enough that the "in flight" gate never held — and the
+  gate broke a resize that happened *while a page was loading*. Reverted.
+- **A 2 ms pump while a resize is unanswered**, painting the moment the new frame lands: 34.9 ms before, 30-34 ms after —
+  inside the ±2 ms run-to-run spread. Removed rather than kept as an unproven second timer.
+
+What is left is the honest part: the resize requests its frame in the same pass as the geometry change, and the wait is
+spent showing the previous frame **undistorted** at its own size rather than squashed to fit. A page that is briefly too
+small reads as "not laid out yet"; a page bent to fit reads as a rendering bug, which is how it was reported.
+
 ## The two numbers a page is laid out with
 
 **Sizes and points are in POINTS; the frame that comes back is in DEVICE PIXELS.** `AGWebEngineSetDeviceScaleFactor` is what
