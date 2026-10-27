@@ -55,6 +55,8 @@ struct App {
 	int finished;
 	int damaged;
 	int drawn;
+	int last_damage_width;
+	int last_damage_height;
 };
 
 static void on_load_changed(void *context, AGWebEngine *engine, AGWebLoadStage stage)
@@ -67,12 +69,14 @@ static void on_load_changed(void *context, AGWebEngine *engine, AGWebLoadStage s
 	}
 }
 
-static void on_damaged(void *context, AGWebEngine *engine)
+static void on_damaged(void *context, AGWebEngine *engine, int x, int y, int width, int height)
 {
 	struct App *app = context;
 
 	(void)engine;
 	app->damaged++;
+	app->last_damage_width = width;
+	app->last_damage_height = height;
 }
 
 static int now_ms(void)
@@ -225,6 +229,18 @@ int main(void)
 		printf("input: hover ok\n");
 	} else {
 		failures++;
+	}
+	/* **AND THE HOVER'S FRAME WAS A BAND, NOT THE PAGE.** The engine diffs each frame against the one before it, so the
+	 * rectangle it reports for a hover is the hovered strip — the number a view uses to repaint 40 rows instead of 200. */
+	{
+		long area = (long)app.last_damage_width * (long)app.last_damage_height;
+
+		printf("input: the hover's damage was %dx%d\n", app.last_damage_width, app.last_damage_height);
+		if (area <= 0 || area > (long)(VIEW_WIDTH * VIEW_HEIGHT) / 4) {
+			fprintf(stderr, "input: the hover damaged %ld pixels of %d, want a band\n", area,
+				VIEW_WIDTH * VIEW_HEIGHT);
+			failures++;
+		}
 	}
 
 	/* 2. THE BUTTON, WHICH IS ALSO JAVASCRIPT. */

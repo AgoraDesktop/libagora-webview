@@ -65,13 +65,18 @@ static void on_title_changed(void *context, AGWebEngine *engine, const char *tit
 /* **A DAMAGED FRAME IS DRAWN IMMEDIATELY, WHICH IS WHAT A VIEW WOULD DO IN `-display`.** The engine's pixels go into the
  * window's own buffer through the seam, so this probe and an NSView take the same path: `AGWindowBeginFrame…`,
  * `AGWebEngineDraw`, damage, end. */
-static void on_damaged(void *context, AGWebEngine *engine)
+static void on_damaged(void *context, AGWebEngine *engine, int x, int y, int damage_width, int damage_height)
 {
 	struct App *app = context;
 	int stride = 0;
 	int width = 0;
 	int height = 0;
 	uint32_t *pixels = AGWindowBeginFrameSized(app->window, &stride, &width, &height);
+
+	(void)x;
+	(void)y;
+	(void)damage_width;
+	(void)damage_height;
 
 	app->damaged++;
 	if (pixels == NULL) {

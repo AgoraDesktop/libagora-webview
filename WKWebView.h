@@ -64,6 +64,14 @@ NS_ASSUME_NONNULL_BEGIN
 	unsigned char *_pixels;
 	int _pixelWidth;
 	int _pixelHeight;
+	/* **WHAT THE ENGINE SAYS CHANGED SINCE THE LAST PAINT**, unioned in DEVICE pixels because that is where the engine
+	 * speaks, and turned into a view rectangle when the view is asked to redraw. `_damageRect` is that rectangle as it was
+	 * last reported, which is what `-damageRect` answers. */
+	int _damage_x;
+	int _damage_y;
+	int _damage_width;
+	int _damage_height;
+	NSRect _damageRect;
 	BOOL _dirty;
 	BOOL _loading;
 	CGFloat _scale;
@@ -106,6 +114,12 @@ NS_ASSUME_NONNULL_BEGIN
 /* The engine's frame size in DEVICE pixels, which is what a caller comparing "the size I asked for" with "the pixels I
  * got" needs on a fractional display. */
 - (NSSize)frameSizeInPixels;
+
+/* **THE LAST FRAME'S CHANGED RECTANGLE, IN VIEW COORDINATES** — the union of everything that changed since the previous
+ * paint, which is exactly what the view told AppKit to redraw. A hover is a 40x40 box and a scroll is the whole view; a
+ * caller that wants to know which is which reads this, and a test uses it to prove the view is not repainting 4 MB to
+ * show a button's highlight. */
+- (NSRect)damageRect;
 
 @end
 

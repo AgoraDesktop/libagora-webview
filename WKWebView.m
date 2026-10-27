@@ -81,7 +81,8 @@ static uint32_t ag_view_modifiers(NSUInteger flags)
 @interface WKWebView ()
 - (void)ag_ensureEngine;
 - (void)ag_pump:(NSTimer *)timer;
-- (void)ag_engineDamaged;
+- (void)ag_engineDamagedInPixelsX:(int)x y:(int)y width:(int)width height:(int)height;
+- (void)ag_flushDamage;
 - (void)ag_engineLoadStage:(int)stage;
 - (void)ag_resizeEngine;
 @end
@@ -89,7 +90,7 @@ static uint32_t ag_view_modifiers(NSUInteger flags)
 /* **THE ENGINE'S CALLBACKS, WITH THE VIEW AS CONTEXT.** They arrive from `AGWebEngineIterate` on the run loop's own
  * thread, which is the only thread this class knows about; the ObjC half does nothing but set flags and tell a delegate. */
 static void ag_view_load_changed(void *context, AGWebEngine *engine, AGWebLoadStage stage);
-static void ag_view_damaged(void *context, AGWebEngine *engine);
+static void ag_view_damaged(void *context, AGWebEngine *engine, int x, int y, int width, int height);
 static void ag_view_title_changed(void *context, AGWebEngine *engine, const char *title);
 
 static void ag_view_load_changed(void *context, AGWebEngine *engine, AGWebLoadStage stage)
@@ -100,12 +101,12 @@ static void ag_view_load_changed(void *context, AGWebEngine *engine, AGWebLoadSt
 	[view ag_engineLoadStage:(int)stage];
 }
 
-static void ag_view_damaged(void *context, AGWebEngine *engine)
+static void ag_view_damaged(void *context, AGWebEngine *engine, int x, int y, int width, int height)
 {
 	WKWebView *view = (WKWebView *)context;
 
 	(void)engine;
-	[view ag_engineDamaged];
+	[view ag_engineDamagedInPixelsX:x y:y width:width height:height];
 }
 
 /* The title is read from the engine when a paint happens rather than kept here: the engine owns it, and a second copy
@@ -248,13 +249,54 @@ static void ag_view_title_changed(void *context, AGWebEngine *engine, const char
 	AGWebEngineIterate((AGWebEngine *)_engine);
 	if (_dirty) {
 		_dirty = NO;
-		[self setNeedsDisplay:YES];
+		[self ag_flushDamage];
 	}
 }
 
-- (void)ag_engineDamaged
+/* **THE RECTANGLE IS UNIONED, NOT REPLACED.** Two frames can arrive between two paints — a load and a hover — and a view
+ * told only about the last one would leave the first one's pixels stale. */
+- (void)ag_engineDamagedInPixelsX:(int)x y:(int)y width:(int)width height:(int)height
 {
+	if (width <= 0 || height <= 0) {
+		return;
+	}
+	if (_damage_width <= 0 || _damage_height <= 0) {
+		_damage_x = x;
+		_damage_y = y;
+		_damage_width = width;
+		_damage_height = height;
+	} else {
+		int right = MAX(_damage_x + _damage_width, x + width);
+		int bottom = MAX(_damage_y + _damage_height, y + height);
+
+		_damage_x = MIN(_damage_x, x);
+		_damage_y = MIN(_damage_y, y);
+		_damage_width = right - _damage_x;
+		_damage_height = bottom - _damage_y;
+	}
 	_dirty = YES;
+}
+
+/* **A DEVICE-PIXEL RECTANGLE BECOMES A VIEW RECTANGLE**, which is a divide and a flip: the engine's y runs down from the
+ * page's top and the view's runs up from its bottom. The result is what AppKit is told to redraw, so it is also the number
+ * the compositor ends up damaging. */
+- (void)ag_flushDamage
+{
+	CGFloat scale = (_scale > 0.0) ? _scale : 1.0;
+	CGFloat height = [self bounds].size.height;
+	NSRect rect;
+
+	if (_damage_width <= 0 || _damage_height <= 0) {
+		return;
+	}
+	rect.origin.x = (CGFloat)_damage_x / scale;
+	rect.size.width = (CGFloat)_damage_width / scale;
+	rect.origin.y = height - (CGFloat)(_damage_y + _damage_height) / scale;
+	rect.size.height = (CGFloat)_damage_height / scale;
+	_damageRect = rect;
+	_damage_width = 0;
+	_damage_height = 0;
+	[self setNeedsDisplayInRect:rect];
 }
 
 - (void)ag_engineLoadStage:(int)stage
@@ -263,7 +305,7 @@ static void ag_view_title_changed(void *context, AGWebEngine *engine, const char
 		_loading = YES;
 	} else if (stage == AGWebLoadFinished) {
 		_loading = NO;
-		[self ag_engineDamaged];
+		_dirty = YES;
 		if ([_navigationDelegate respondsToSelector:@selector(webView:didFinishNavigation:)]) {
 			[_navigationDelegate webView:self didFinishNavigation:nil];
 		}
@@ -372,6 +414,11 @@ static void ag_view_title_changed(void *context, AGWebEngine *engine, const char
 - (void)setNavigationDelegate:(id<WKNavigationDelegate>)delegate
 {
 	_navigationDelegate = delegate;	/* assigned, as Apple's is */
+}
+
+- (NSRect)damageRect
+{
+	return _damageRect;
 }
 
 - (NSSize)frameSizeInPixels

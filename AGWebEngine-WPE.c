@@ -49,8 +49,11 @@
  * rather than pass on. */
 #include <AppKit/platform/AGWindowServer.h>
 
+#include <AppKit/platform/AGGL.h>
+
 #include <wpe/wpe.h>
 #include <wpe/fdo.h>
+#include <wpe/fdo-egl.h>
 #include <wpe/unstable/fdo-shm.h>
 #include <wpe/webkit.h>
 
@@ -82,6 +85,13 @@ struct AGWebEngine {
 	struct wpe_view_backend_exportable_fdo *exportable;
 	struct wpe_view_backend *backend;
 	WebKitWebView *view;
+	/* **THE GPU HALF, WHEN THE CALLER ASKED FOR IT.** An `AGGL` context is the same one `libagora-app` builds for its own
+	 * probe; the engine's exported images are imported into it, blitted, and read back. Null on the shared-memory path,
+	 * which is the default and needs none of this. */
+	AGGLContext *gl;
+	int export_path;		/* AGWebExport, as it actually turned out */
+	uint32_t *scratch;		/* the readback, before the diff folds it into `frame` */
+	size_t scratch_size;
 
 	int width;
 	int height;
@@ -89,6 +99,13 @@ struct AGWebEngine {
 	int frame_width;
 	int frame_height;
 	int have_frame;
+	/* **WHAT THE LAST FRAME CHANGED**, in device pixels, top-down: the bounding box of the pixels that differ from what
+	 * was there before. Computed during the copy rather than by a second pass, and reset to the whole frame whenever the
+	 * buffer is new. */
+	int damage_x;
+	int damage_y;
+	int damage_width;
+	int damage_height;
 };
 
 /* **ONE INITIALISATION PER PROCESS, BECAUSE THE LOADER IS A LIBRARY-WIDE SINGLETON.** `wpe_loader_init` names the
@@ -103,7 +120,22 @@ static int ag_web_library_ready(void)
 		if (!wpe_loader_init("libWPEBackend-fdo-1.0.so")) {
 			fprintf(stderr, "AGWebEngine: libwpe could not load libWPEBackend-fdo-1.0.so\n");
 			state = -1;
-		} else if (!wpe_fdo_initialize_shm()) {
+		} else {
+			state = 1;
+		}
+	}
+	return state == 1;
+}
+
+/* **THE SHM EXPORT IS PROCESS-WIDE AND THE EGL ONE IS PER DISPLAY**, which is why they are initialised separately: an
+ * engine that never asked for shared memory should not set up its machinery, and the EGL initialisation names the very
+ * display the images will be created on. */
+static int ag_web_shm_ready(void)
+{
+	static int state;	/* 0 = not tried, 1 = ready, -1 = failed */
+
+	if (state == 0) {
+		if (!wpe_fdo_initialize_shm()) {
 			fprintf(stderr, "AGWebEngine: libwpebackend-fdo could not initialise its shm export\n");
 			state = -1;
 		} else {
@@ -121,11 +153,15 @@ static int ag_web_library_ready(void)
  * seam's integer is `0x00RRGGBB`, so the copy is `& 0x00ffffff` per pixel — the alpha is dropped because an Agora window
  * is opaque and the engine's page background is opaque too. The frame buffer is reallocated only when the engine's size
  * changes, which is a resize and not a frame. */
-static void ag_web_take_pixels(AGWebEngine *engine, struct wl_shm_buffer *buffer, int width, int height, int stride,
-			       const unsigned char *data)
+static void ag_web_merge_frame(AGWebEngine *engine, const uint32_t *source, int width, int height, int source_stride)
 {
 	uint32_t *grown;
 	int x, y;
+	int damaged = 0;
+	int min_x = width;
+	int min_y = height;
+	int max_x = -1;
+	int max_y = -1;
 
 	if (width <= 0 || height <= 0) {
 		return;
@@ -138,17 +174,68 @@ static void ag_web_take_pixels(AGWebEngine *engine, struct wl_shm_buffer *buffer
 		engine->frame = grown;
 		engine->frame_width = width;
 		engine->frame_height = height;
+		/* **A NEW BUFFER IS ALL DAMAGE.** Every pixel in it is a pixel that was not there before, and a caller told
+		 * otherwise would keep the stale half of its last paint. */
+		engine->damage_x = 0;
+		engine->damage_y = 0;
+		engine->damage_width = width;
+		engine->damage_height = height;
+		engine->have_frame = 1;
+		for (y = 0; y < height; y++) {
+			const uint32_t *row = (const uint32_t *)((const unsigned char *)source +
+								(size_t)y * (size_t)source_stride);
+			uint32_t *out = engine->frame + (size_t)y * (size_t)width;
+
+			for (x = 0; x < width; x++) {
+				out[x] = row[x] & 0x00ffffffu;
+			}
+		}
+		return;
 	}
+
+	/* **THE DIFF IS FUSED INTO THE COPY, AND IT IS THE ONLY REASON THIS LOOP DOES ANYTHING BUT MEMCPY.** A second pass
+	 * would read the frame again for the same answer; a compare on values already in registers costs nothing next to the
+	 * memory traffic the copy already pays — measured in the test, which asserts the rectangle rather than the clock. */
 	for (y = 0; y < height; y++) {
-		const uint32_t *row = (const uint32_t *)(data + (size_t)y * (size_t)stride);
+		const uint32_t *row = (const uint32_t *)((const unsigned char *)source +
+							(size_t)y * (size_t)source_stride);
 		uint32_t *out = engine->frame + (size_t)y * (size_t)width;
 
 		for (x = 0; x < width; x++) {
-			out[x] = row[x] & 0x00ffffffu;
+			uint32_t value = row[x] & 0x00ffffffu;
+
+			if (value != out[x]) {
+				out[x] = value;
+				if (!damaged) {
+					damaged = 1;
+					min_x = max_x = x;
+					min_y = max_y = y;
+				} else {
+					if (x < min_x) {
+						min_x = x;
+					}
+					if (x > max_x) {
+						max_x = x;
+					}
+					if (y < min_y) {
+						min_y = y;
+					}
+					if (y > max_y) {
+						max_y = y;
+					}
+				}
+			}
 		}
 	}
-	engine->have_frame = 1;
-	(void)buffer;
+	if (damaged) {
+		engine->damage_x = min_x;
+		engine->damage_y = min_y;
+		engine->damage_width = max_x - min_x + 1;
+		engine->damage_height = max_y - min_y + 1;
+	} else {
+		engine->damage_width = 0;
+		engine->damage_height = 0;
+	}
 }
 
 static void ag_web_export_shm_buffer(void *data, struct wpe_fdo_shm_exported_buffer *buffer)
@@ -164,8 +251,9 @@ static void ag_web_export_shm_buffer(void *data, struct wpe_fdo_shm_exported_buf
 			wl_shm_buffer_get_format(shm));
 	} else {
 		wl_shm_buffer_begin_access(shm);
-		ag_web_take_pixels(engine, shm, wl_shm_buffer_get_width(shm), wl_shm_buffer_get_height(shm),
-				   wl_shm_buffer_get_stride(shm), wl_shm_buffer_get_data(shm));
+		ag_web_merge_frame(engine, (const uint32_t *)wl_shm_buffer_get_data(shm),
+				   wl_shm_buffer_get_width(shm), wl_shm_buffer_get_height(shm),
+				   wl_shm_buffer_get_stride(shm));
 		wl_shm_buffer_end_access(shm);
 	}
 	/* **THE THREE CALLS OF STEP 5, IN ORDER.** The buffer goes back, the frame is acknowledged, and the view is told it
@@ -173,10 +261,80 @@ static void ag_web_export_shm_buffer(void *data, struct wpe_fdo_shm_exported_buf
 	wpe_view_backend_exportable_fdo_dispatch_release_shm_exported_buffer(engine->exportable, buffer);
 	wpe_view_backend_exportable_fdo_dispatch_frame_complete(engine->exportable);
 	wpe_view_backend_dispatch_frame_displayed(engine->backend);
-	if (engine->callbacks.damaged != NULL) {
-		engine->callbacks.damaged(engine->context, engine);
+	/* **A FRAME THAT CHANGED NOTHING IS NOT ANNOUNCED.** WebKit repaints on its own schedule and some of those renders
+	 * are identical to the last; telling a view to repaint for them is the work this whole diff exists to avoid. */
+	if (engine->callbacks.damaged != NULL && engine->damage_width > 0 && engine->damage_height > 0) {
+		engine->callbacks.damaged(engine->context, engine, engine->damage_x, engine->damage_y,
+					  engine->damage_width, engine->damage_height);
 	}
 }
+
+/* **THE SAME FRAME, AS AN IMAGE, COMPOSITED AND READ BACK.** The exported `EGLImage` is imported on this engine's `AGGL`
+ * context, drawn into an offscreen target with the V axis flipped (a producer's frame is top-down and GL's texture row 0
+ * is its top), read back into the seam's own format, and handed to the same diff the shared-memory path uses. */
+static void ag_web_export_egl_image(void *data, struct wpe_fdo_egl_exported_image *exported)
+{
+	AGWebEngine *engine = data;
+	EGLImageKHR image;
+	int width;
+	int height;
+	unsigned int texture;
+	size_t needed;
+
+	if (engine->gl == NULL || exported == NULL) {
+		return;
+	}
+	image = wpe_fdo_egl_exported_image_get_egl_image(exported);
+	width = (int)wpe_fdo_egl_exported_image_get_width(exported);
+	height = (int)wpe_fdo_egl_exported_image_get_height(exported);
+	if (width <= 0 || height <= 0) {
+		wpe_view_backend_exportable_fdo_egl_dispatch_release_exported_image(engine->exportable, exported);
+		return;
+	}
+	texture = AGGLTextureFromImage(engine->gl, image, width, height);
+	if (texture == 0) {
+		fprintf(stderr, "AGWebEngine: the exported image did not become a texture\n");
+		wpe_view_backend_exportable_fdo_egl_dispatch_release_exported_image(engine->exportable, exported);
+		return;
+	}
+	needed = (size_t)width * (size_t)height * 4u;
+	if (needed > engine->scratch_size) {
+		uint32_t *grown = realloc(engine->scratch, needed);
+
+		if (grown == NULL) {
+			AGGLDeleteTexture(engine->gl, texture);
+			wpe_view_backend_exportable_fdo_egl_dispatch_release_exported_image(engine->exportable, exported);
+			return;
+		}
+		engine->scratch = grown;
+		engine->scratch_size = needed;
+	}
+	if (AGGLBeginFrame(engine->gl, width, height)) {
+		AGGLBlitTextureFlipped(engine->gl, texture, 0, 0, width, height);
+		AGGLEndFrame(engine->gl);
+		if (AGGLReadPixels(engine->gl, 0, 0, width, height, engine->scratch, width * 4)) {
+			ag_web_merge_frame(engine, engine->scratch, width, height, width * 4);
+		}
+	}
+	AGGLDeleteTexture(engine->gl, texture);
+	/* The producer's image goes back before the frame is acknowledged, and the view is told last — the same order the
+	 * shared-memory path uses, and for the same reason (see this file's header). */
+	wpe_view_backend_exportable_fdo_egl_dispatch_release_exported_image(engine->exportable, exported);
+	wpe_view_backend_exportable_fdo_dispatch_frame_complete(engine->exportable);
+	wpe_view_backend_dispatch_frame_displayed(engine->backend);
+	if (engine->callbacks.damaged != NULL && engine->damage_width > 0 && engine->damage_height > 0) {
+		engine->callbacks.damaged(engine->context, engine, engine->damage_x, engine->damage_y,
+					  engine->damage_width, engine->damage_height);
+	}
+}
+
+static const struct wpe_view_backend_exportable_fdo_egl_client ag_web_egl_client = {
+	NULL,				/* export_egl_image — the struct form carries the size, so that is the one used */
+	ag_web_export_egl_image,
+	NULL,				/* export_shm_buffer — not on this path */
+	NULL,
+	NULL,
+};
 
 static const struct wpe_view_backend_exportable_fdo_client ag_web_client = {
 	NULL,				/* export_buffer_resource — wl_buffer sharing, not used here */
@@ -373,8 +531,15 @@ static void ag_web_title_changed(GObject *object, GParamSpec *spec, gpointer dat
 
 AGWebEngine *AGWebEngineCreate(int width, int height, const AGWebEngineCallbacks *callbacks, void *context)
 {
+	return AGWebEngineCreateWithExport(width, height, AGWebExportSHM, callbacks, context);
+}
+
+AGWebEngine *AGWebEngineCreateWithExport(int width, int height, AGWebExport export,
+					 const AGWebEngineCallbacks *callbacks, void *context)
+{
 	AGWebEngine *engine;
 	WebKitWebViewBackend *view_backend;
+	int use_egl = 0;
 
 	if (!ag_web_library_ready()) {
 		return NULL;
@@ -390,10 +555,50 @@ AGWebEngine *AGWebEngineCreate(int width, int height, const AGWebEngineCallbacks
 	engine->width = width > 0 ? width : 1;
 	engine->height = height > 0 ? height : 1;
 
-	engine->exportable = wpe_view_backend_exportable_fdo_create(&ag_web_client, engine, (uint32_t)engine->width,
-								    (uint32_t)engine->height);
+	/* **THE GPU PATH IS ATTEMPTED FIRST WHEN IT WAS ASKED FOR, AND ABANDONED QUIETLY WHEN IT CANNOT RUN.** A machine with
+	 * no EGL — or with an EGL that cannot import a dma-buf — is not a failure of the engine: the frames are the same
+	 * pixels either way, and `AGWebEngineExportPath` is how the caller finds out which one it got. */
+	if (export == AGWebExportEGL) {
+		AGGLContext *gl = AGGLContextCreate(NULL);
+		void *display = NULL;
+
+		if (gl != NULL) {
+			AGGLContextHandles(gl, &display, NULL, NULL);
+			if (display != NULL && wpe_fdo_initialize_for_egl_display((EGLDisplay)display)) {
+				engine->gl = gl;
+				use_egl = 1;
+			} else {
+				AGGLContextDestroy(gl);
+			}
+		}
+	}
+	if (use_egl) {
+		engine->exportable = wpe_view_backend_exportable_fdo_egl_create(&ag_web_egl_client, engine,
+									       (uint32_t)engine->width,
+									       (uint32_t)engine->height);
+		engine->export_path = AGWebExportEGL;
+	} else {
+		if (export == AGWebExportEGL) {
+			/* **ONE EXPORT PER PROCESS, AND THE FIRST ENGINE DECIDES.** `libwpebackend-fdo` is initialised ONCE — for
+			 * shared memory or for an EGL display, not both — so a process that has already made a shm engine cannot
+			 * have an EGL one. MEASURED: the second of the two in one process falls back, whatever order they are asked
+			 * for in. The message says so, because "EGL is unavailable" is wrong and would send the next person looking
+			 * at their driver. */
+			fprintf(stderr, "AGWebEngine: the EGL export is unavailable — no AGGL context, or this process already "
+					"initialised libwpebackend-fdo for another export. Falling back to shared memory.\n");
+		}
+		if (!ag_web_shm_ready()) {
+			free(engine);
+			return NULL;
+		}
+		engine->exportable = wpe_view_backend_exportable_fdo_create(&ag_web_client, engine,
+									   (uint32_t)engine->width,
+									   (uint32_t)engine->height);
+		engine->export_path = AGWebExportSHM;
+	}
 	if (engine->exportable == NULL) {
 		fprintf(stderr, "AGWebEngine: the FDO backend refused to make a view backend\n");
+		AGGLContextDestroy(engine->gl);
 		free(engine);
 		return NULL;
 	}
@@ -426,6 +631,12 @@ void AGWebEngineDestroy(AGWebEngine *engine)
 	 * `webkit_web_view_new` (the header says so, and MEASURED as a SIGSEGV inside `g_object_unref` when this file also
 	 * unreffed it), so the view holds it and dropping the view releases it. The view backend itself belongs to the
 	 * exportable, which goes second. */
+	if (engine->gl != NULL) {
+		AGGLContextDestroy(engine->gl);
+		engine->gl = NULL;
+	}
+	free(engine->scratch);
+	engine->scratch = NULL;
 	if (engine->view != NULL) {
 		g_object_unref(engine->view);
 		engine->view = NULL;
@@ -491,6 +702,14 @@ void AGWebEngineSetSize(AGWebEngine *engine, int width, int height)
 	 * new viewport and paints when it is ready; a caller that resized only its own buffer would stretch the old
 	 * layout. */
 	wpe_view_backend_dispatch_set_size(engine->backend, (uint32_t)width, (uint32_t)height);
+}
+
+const char *AGWebEngineExportPath(AGWebEngine *engine)
+{
+	if (engine == NULL) {
+		return "none";
+	}
+	return (engine->export_path == AGWebExportEGL) ? "egl" : "shm";
 }
 
 const char *AGWebEngineURI(AGWebEngine *engine)

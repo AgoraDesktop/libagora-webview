@@ -52,6 +52,16 @@ add_test(NAME appkit-webview COMMAND appkit_webview)
 set_tests_properties(appkit-webview PROPERTIES SKIP_RETURN_CODE 77
   ENVIRONMENT "${_agora_webview_test_env}")
 
+# **THE OTHER EXPORT PATH: the same page as EGLImages.** The seam imports each one, blits it flipped, reads it back; the
+# assertion is the same red-band-at-the-top one the shm test makes, because a flipped blit or a channel swap produces a
+# frame that is not the page. SKIPS when the machine's EGL cannot import a dma-buf (the seam falls back, and says so).
+add_executable(webengine_export webengine_export.c)
+target_link_libraries(webengine_export PRIVATE WebView)
+
+add_test(NAME webengine-egl COMMAND webengine_export)
+set_tests_properties(webengine-egl PROPERTIES SKIP_RETURN_CODE 77
+  ENVIRONMENT "${_agora_webview_test_env}")
+
 add_test(NAME webengine-page
   COMMAND "${CMAKE_CURRENT_SOURCE_DIR}/run-webengine.sh"
           "$<TARGET_FILE:webengine_probe>" "${AGORA_WINDOW_SERVER_BINARY}")

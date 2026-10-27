@@ -35,6 +35,21 @@ LGPL-2.1, `libwpe` and `libwpebackend-fdo` are BSD-2, and none is vendored or pi
 apt install libwpe-1.0-dev libwpebackend-fdo-1.0-dev libwpewebkit-2.0-dev
 ```
 
+## Two export paths, and which one wins
+
+| path | what it is | measured (a page animating at 60 Hz) |
+|---|---|---|
+| `AGWebExportSHM` (default) | `wl_shm` pixels, copied into the seam's frame — no EGL, no device | **62 fps** at 320x200, **59-62 fps** at 1280x800 |
+| `AGWebExportEGL` | the same frames as `EGLImage`s, imported on an `AGGL` context, blitted (V flipped) and **read back** | **62 fps** at 320x200, **35 fps** at 1280x800 |
+
+So the GPU path is SLOWER for a host that wants pixels, and saying otherwise would be a lie with a number behind it: the
+readback of a megapixel costs about 13 ms a frame, and the shared-memory path's memcpy costs a fraction of that. EGL's
+value is for a caller that *does not* read back — one that composites the engine's texture itself — and that door does not
+exist yet (`AGGL` has the pieces; nothing in this component draws into a window's GPU buffer).
+
+**AND ONE PROCESS GETS ONE OF THEM.** `libwpebackend-fdo` is initialised once, for shared memory or for an EGL display,
+so the FIRST engine decides; a later engine asking for the other path falls back and says so. Measured in both orders.
+
 Frames arrive through the FDO backend's **shared-memory** export — `wl_shm` pixels, no EGL, no device, no driver — which
 is the path a CPU-drawn AppKit wants and the one that works on a machine with no GPU at all. Its EGL export produces the
 same picture as an `EGLImage` for a GPU caller; `libagora-app`'s `AGGL` imports one, and that is measured (see that
@@ -58,6 +73,17 @@ Written down in `AGWebEngine-WPE.c` in the order it has to happen. The three fin
 
 The web process is **sandboxed** (bubblewrap) and needs no environment variable here; the `WEBKIT_DISABLE_SANDBOX…`
 escape hatch is deliberately unused by this component and its tests.
+
+## Partial damage
+
+WPE hands its host a finished buffer and no damage, so the seam computes it **while copying**: each pixel is compared
+with the one already in the frame, and the bounding box of the differences is what the `damaged` callback carries. A pass
+that was happening anyway, one compare per pixel, and the rectangle is what a view needs to repaint a band instead of a
+surface.
+
+`WKWebView` unions that rectangle (in device pixels), converts it to view coordinates — a divide by the buffer scale and a
+y flip — and calls `-setNeedsDisplayInRect:`. MEASURED in `appkit-webview`: a hover on a 40-point full-width box damages
+**320x40 at (0,120)**, where before it damaged the whole view, and the first frame's damage is (correctly) everything.
 
 ## The class: `WKWebView`
 
@@ -121,6 +147,7 @@ measured rather than assumed, and both are in `AGWebEngine-WPE.c` where they bit
 | `webengine-page` | a real page — red strip above, blue body below — reaches the glass: the **composited screenshot** is asserted, along with all three load stages, the title, and two drawn frames (the first is the blank page) | `window-server` built (else SKIP 77) |
 | `webengine-teardown` | two engines can be made and dropped in one process — the lifetime a real application has on `-terminate:` | nothing |
 | `appkit-webview` | the CLASS, offscreen: the page arrives **upright** (the rep's own orientation is measured first), the title is the page's, and the pointer and the wheel reach the page through the view's own y-flip and scale | nothing |
+| `webengine-egl` | the same page through the **EGL export**: imported, blitted flipped, read back — asserted as a red band at the top and blue below, because a flipped blit or a channel swap is a frame that is not the page. SKIPS when the machine's EGL cannot import a dma-buf | EGL |
 | `webengine-input` | the page hears the pointer (`:hover`), the button (an inline style set by the page's own script), the keys (a `keydown` listener with no field focused) and the wheel (a band below the fold comes into view) — each asserted as a colour in the engine's own frame | nothing |
 
 ```sh
@@ -136,10 +163,8 @@ by name.
 
 1. **Resize under load** and the scale factor (`wpe_view_backend_dispatch_set_device_scale_factor`), so a fractional
    Agora output renders pages at its own device pixels.
-2. **The EGL export path**, for a caller that composites on the GPU: the same seam, `AGGLTextureFromImage` instead of a
-   memcpy.
-3. **Partial damage**: the view redraws its whole rect when a frame arrives, which is right for a page (it is what a page
-   is) but is not free at 1280x800. The engine knows which rectangle changed; nothing asks it yet.
+2. **A GPU presenter**, so the EGL path can stop reading back: `AGGLBlitTexture` into the window's own dma-buf
+   (`AG_WINDOW_DMABUF=1`), which is the composition the measurement above says is worth building.
 
 ## Licence
 

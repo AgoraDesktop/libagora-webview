@@ -51,20 +51,62 @@ typedef enum {
 	AGWebLoadFinished = 3
 } AGWebLoadStage;
 
-/* **EVERY CALLBACK IS OPTIONAL AND EVERY ONE COMES FROM `AGWebEngineIterate`.** `damaged` means "there are new pixels
- * to draw" and is the only one a caller must act on; it is called once per engine frame, and a caller that ignores it
- * simply draws the newest pixels whenever it next paints, which is correct but a frame late. */
+/* **EVERY CALLBACK IS OPTIONAL AND EVERY ONE COMES FROM `AGWebEngineIterate`.** `damaged` means "these pixels changed"
+ * and is the only one a caller must act on; it is called once per engine frame, and a caller that ignores it simply draws
+ * the newest pixels whenever it next paints, which is correct but a frame late.
+ *
+ * **THE RECTANGLE IS THE WHOLE POINT OF THE CALLBACK BEING FOUR NUMBERS.** WPE hands its host a finished buffer and no
+ * damage, so the engine computes it while copying — comparing each pixel with the one already in its frame, which costs a
+ * compare per pixel on a pass that was happening anyway. The result is a bounding box in DEVICE pixels with a top-down
+ * origin: the same space `AGWebEngineDraw` writes and the same space `AGWindowDamage` takes. A view uses it to invalidate
+ * a rectangle instead of its whole self, which at 1280x800 is the difference between repainting 4 MB and repainting the
+ * 40x40 a hover changed.
+ *
+ * The first frame, a resize and a scroll are the whole frame, and that is honest rather than pessimistic: those really
+ * did change everything. */
 typedef struct AGWebEngineCallbacks {
 	void (*load_changed)(void *context, AGWebEngine *engine, AGWebLoadStage stage);
 	void (*title_changed)(void *context, AGWebEngine *engine, const char *title);
-	void (*damaged)(void *context, AGWebEngine *engine);
+	void (*damaged)(void *context, AGWebEngine *engine, int x, int y, int width, int height);
 } AGWebEngineCallbacks;
+
+/* **HOW THE ENGINE'S FRAMES REACH THIS PROCESS.** Two of WPE's export paths produce the same picture and cost different
+ * things:
+ *
+ *   - `AGWebExportSHM` is shared memory: the engine's pixels arrive as a `wl_shm` buffer and are copied into this seam's
+ *     frame. No EGL, no device, no driver — the path a CPU-drawn AppKit wants, and the one that works on a machine with
+ *     no GPU at all. It is the default.
+ *   - `AGWebExportEGL` is the same frames as `EGLImage`s: the seam imports each one as a texture on an `AGGL` context,
+ *     blits it into an offscreen target and reads it back. It exists for a caller that already composites on the GPU (in
+ *     which case the readback can go away entirely) and it is measured against the shm path here rather than assumed
+ *     better — on this machine the readback makes it SLOWER, and the numbers are in the README.
+ *
+ * `AGWebExportEGL` is a PREFERENCE and not a promise: a machine with no usable EGL falls back to shared memory, and
+ * `AGWebEngineExportPath` is how a caller finds out which one it got.
+ *
+ * **AND ONE PROCESS GETS ONE OF THEM.** `libwpebackend-fdo` is initialised once, for shared memory or for an EGL
+ * display, and never both — so THE FIRST ENGINE IN A PROCESS DECIDES, and a later engine asking for the other path falls
+ * back. MEASURED, in both orders. An application that wants the GPU path must ask for it before it makes a shared-memory
+ * engine, and `AGWebEngineExportPath` is how it checks what it got. */
+typedef enum {
+	AGWebExportSHM = 0,
+	AGWebExportEGL = 1
+} AGWebExport;
 
 /* Create an engine sized in DEVICE pixels, with nothing loaded (the page is blank white, which is what a browser shows).
  * `callbacks` may be NULL and `context` is passed back untouched. Returns NULL when the machine cannot start the engine
  * at all — no `libWPEBackend-fdo`, no WebKit — and the reason is printed to stderr, because a web view that silently
  * never paints is worse than one that refuses. */
 AGWebEngine *AGWebEngineCreate(int width, int height, const AGWebEngineCallbacks *callbacks, void *context);
+
+/* The same, choosing the export path. `AGWebEngineCreate` is this with `AGWebExportSHM`. */
+AGWebEngine *AGWebEngineCreateWithExport(int width, int height, AGWebExport export,
+					 const AGWebEngineCallbacks *callbacks, void *context);
+
+/* **WHICH PATH THIS ENGINE ACTUALLY TOOK**, as a name a diagnostic can print: `"shm"`, `"egl"`, or `"none"` for an
+ * engine that is not running. A caller that asked for EGL and fell back needs to be able to see that rather than infer it
+ * from a frame rate. */
+const char *AGWebEngineExportPath(AGWebEngine *engine);
 void AGWebEngineDestroy(AGWebEngine *engine);
 
 /* **PUMP THE ENGINE, AND NEVER BLOCK.** Returns 1 when it did any work, 0 when there was nothing to do; a caller's loop

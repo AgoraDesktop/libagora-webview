@@ -224,6 +224,11 @@ int main(void)
 		check(row_has(rep, bottom_row, is_blue), "the page's blue body is at the BOTTOM of the view");
 	}
 
+	/* **AND THE WHOLE THING WAS THE FIRST FRAME'S DAMAGE.** A page that arrives is a page that changed everywhere, so a
+	 * view told anything less for its first paint would keep half a blank surface. */
+	check([view damageRect].size.height > (CGFloat)H * 0.8,
+	      "the first frame's damage was the whole view (a load repaints everything)");
+
 	/* 2. THE POINTER, THROUGH THE VIEW'S OWN CONVERSION. The `:hover` box is the page's SECOND 40 points — y 40 to 79 —
 	 * so its middle is 60 down the page, which in the view's own coordinates (unflipped, origin at the bottom) is
 	 * 200 - 60 = 140. A view that did not flip y would put this pointer in a different strip and paint nothing. */
@@ -248,6 +253,22 @@ int main(void)
 			hovered = rep_has(rep, is_green);
 		}
 		check(hovered, "the pointer reached the page (its :hover box turned green)");
+		/* **AND THE REPAINT WAS A BAND, NOT THE VIEW.** The hovered box is 40 points tall and the full width of the page,
+		 * so the damage it produces is one 320x40 strip — this is the assertion that the engine's rectangle reaches
+		 * AppKit instead of a bare "something changed". Compared as an AREA, because a 40-point band and a 200-point
+		 * view differ by 5x and a rectangle's shape is not the point. */
+		{
+			NSRect damage = [view damageRect];
+			CGFloat area = damage.size.width * damage.size.height;
+			CGFloat whole = (CGFloat)W * (CGFloat)H;
+
+			printf("appkit_webview: the hover damaged %.0fx%.0f at (%.0f,%.0f)\n", damage.size.width,
+			       damage.size.height, damage.origin.x, damage.origin.y);
+			check(damage.size.height > 0.0 && area < whole * 0.35,
+			      "a hover repainted a band rather than the whole view");
+			check(damage.origin.y + damage.size.height <= (CGFloat)H * 0.9,
+			      "and the band is where the hovered box is, not the whole surface");
+		}
 	}
 
 	/* 3. THE WHEEL, IN APPKIT'S SIGN. `deltaY` is positive when a person scrolls UP, and the cyan band begins 280 points
