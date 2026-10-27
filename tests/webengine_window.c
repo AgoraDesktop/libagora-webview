@@ -43,6 +43,7 @@ struct App {
 	unsigned int presented;
 	int gpu_frames;
 	int cancels;
+	int sized_to_buffer;
 };
 
 static void on_load_changed(void *context, AGWebEngine *engine, AGWebLoadStage stage)
@@ -132,6 +133,14 @@ int main(void)
 				continue;
 			}
 			waited = 0;
+			/* **THE ENGINE IS SIZED TO THE BUFFER, NOT TO THE POINTS ASKED FOR.** A window at 1.332 output pixels per
+			 * point has a buffer 33% wider than its frame, and a page laid out for 320 points but drawn into a 426-pixel
+			 * buffer would be scaled up — correct geometry, blurred type. The destination is the authority on how many
+			 * pixels there are, so the first one settles it. */
+			if (!app.sized_to_buffer) {
+				AGWebEngineSetSize(app.engine, dst.width, dst.height);
+				app.sized_to_buffer = 1;
+			}
 			AGWebEngineSetPresentDMABUF(app.engine, dst.fd, dst.width, dst.height, dst.stride, dst.fourcc,
 						    dst.modifier);
 			AGWebEngineIterate(app.engine);

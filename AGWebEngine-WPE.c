@@ -101,6 +101,10 @@ struct AGWebEngine {
 	unsigned int present_fourcc;
 	unsigned long long present_modifier;
 	unsigned int frames_presented;
+	/* **A FRAME THAT ARRIVED WHILE NO DESTINATION WAS REGISTERED.** The host's loop registers a destination, pumps, and
+	 * commits — but WebKit's frame can land in any turn, including one where the host had no free buffer. The AGGL target
+	 * keeps the last composited frame, so this flag says "there is something to put into the next destination". */
+	int frame_pending;
 
 	int width;
 	int height;
@@ -278,6 +282,43 @@ static void ag_web_export_shm_buffer(void *data, struct wpe_fdo_shm_exported_buf
 	}
 }
 
+/* **THE LAST FRAME, FROM THIS ENGINE'S TARGET INTO THE HOST'S BUFFER.** Written as a function of its own because two
+ * callers need it: the export callback (a frame just arrived) and `AGWebEngineSetPresentDMABUF` (a destination just
+ * arrived). Both orders happen — WebKit does not wait for the host's buffer — and a frame that is composited only on the
+ * first of them is a frame lost half the time, which is exactly what MEASURED as a window that stayed white. */
+static int ag_web_present_pending(AGWebEngine *engine)
+{
+	AGGLRenderTarget *destination;
+	unsigned int frame_texture;
+
+	if (engine == NULL || engine->gl == NULL || !engine->frame_pending || engine->present_fd < 0) {
+		return 0;
+	}
+	destination = AGGLRenderTargetFromDmabuf(engine->gl, engine->present_fd, engine->present_width,
+						 engine->present_height, engine->present_stride, engine->present_fourcc,
+						 engine->present_modifier);
+	if (destination == NULL) {
+		/* **NAMED RATHER THAN SILENT.** A present that cannot import the destination is a frame that never arrives, and
+		 * from the host's side that is indistinguishable from a page that stopped painting. The numbers are what the
+		 * import needs, so they are what the message carries. */
+		fprintf(stderr, "AGWebEngine: the present destination %dx%d stride %d fourcc 0x%08x modifier 0x%llx could "
+				"not be imported\n", engine->present_width, engine->present_height, engine->present_stride,
+			engine->present_fourcc, engine->present_modifier);
+		return 0;
+	}
+	frame_texture = AGGLTargetTexture(engine->gl);
+	if (!AGGLBeginRenderTarget(engine->gl, destination)) {
+		AGGLRenderTargetDestroy(engine->gl, destination);
+		return 0;
+	}
+	AGGLBlitTextureFlipped(engine->gl, frame_texture, 0, 0, engine->present_width, engine->present_height);
+	AGGLEndRenderTarget(engine->gl);
+	AGGLRenderTargetDestroy(engine->gl, destination);
+	engine->frame_pending = 0;
+	engine->frames_presented++;
+	return 1;
+}
+
 /* **THE SAME FRAME, AS AN IMAGE, COMPOSITED AND READ BACK.** The exported `EGLImage` is imported on this engine's `AGGL`
  * context, drawn into an offscreen target with the V axis flipped (a producer's frame is top-down and GL's texture row 0
  * is its top), read back into the seam's own format, and handed to the same diff the shared-memory path uses. */
@@ -324,36 +365,10 @@ static void ag_web_export_egl_image(void *data, struct wpe_fdo_egl_exported_imag
 		AGGLDeleteTexture(engine->gl, texture);
 		texture = 0;
 		if (engine->export_path == AGWebExportEGLPresent) {
-			/* **NO READBACK: THE FRAME GOES FROM THIS TARGET TO THE HOST'S BUFFER ON THE GPU.** The destination is
-			 * the host's, registered before this pump, and the blit is the same one the readback path makes — the only
-			 * difference is where it lands. */
-			AGGLRenderTarget *destination = NULL;
-
-			if (engine->present_fd >= 0) {
-				destination = AGGLRenderTargetFromDmabuf(engine->gl, engine->present_fd,
-									 engine->present_width, engine->present_height,
-									 engine->present_stride, engine->present_fourcc,
-									 engine->present_modifier);
-			}
-			if (destination == NULL && engine->present_fd >= 0) {
-				/* **NAMED RATHER THAN SILENT.** A present that cannot import the destination is a frame that never
-				 * arrives, and from the host's side that is indistinguishable from a page that stopped painting. The
-				 * numbers are what the import needs, so they are what the message carries. */
-				fprintf(stderr, "AGWebEngine: the present destination %dx%d stride %d fourcc 0x%08x modifier "
-						"0x%llx could not be imported\n", engine->present_width, engine->present_height,
-					engine->present_stride, engine->present_fourcc, engine->present_modifier);
-			}
-			if (destination != NULL) {
-				unsigned int frame_texture = AGGLTargetTexture(engine->gl);
-
-				if (AGGLBeginRenderTarget(engine->gl, destination)) {
-					AGGLBlitTextureFlipped(engine->gl, frame_texture, 0, 0, engine->present_width,
-							       engine->present_height);
-					AGGLEndRenderTarget(engine->gl);
-					engine->frames_presented++;
-				}
-				AGGLRenderTargetDestroy(engine->gl, destination);
-			}
+			/* **NO READBACK: THE FRAME GOES FROM THIS TARGET TO THE HOST'S BUFFER ON THE GPU.** It is put there now if a
+			 * destination is registered, and otherwise remembered for the next one — see `frame_pending`. */
+			engine->frame_pending = 1;
+			ag_web_present_pending(engine);
 			/* **AND THE DIFF IS NOT COMPUTED, BECAUSE THERE ARE NO PIXELS TO DIFF.** A present-mode engine never reads its
 			 * frames back, so it reports the whole frame as damaged: the host knows a frame arrived, and a window that is
 			 * showing a page repaints all of it anyway. */
@@ -807,6 +822,9 @@ int AGWebEngineSetPresentDMABUF(AGWebEngine *engine, int fd, int width, int heig
 	engine->present_stride = stride;
 	engine->present_fourcc = fourcc;
 	engine->present_modifier = modifier;
+	/* **A FRAME THAT ALREADY ARRIVED GOES OUT NOW.** Without this the host's very first destination is filled by the
+	 * next frame instead of the one waiting, and a page that paints once looks like a page that never painted. */
+	ag_web_present_pending(engine);
 	return 1;
 }
 

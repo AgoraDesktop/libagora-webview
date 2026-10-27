@@ -87,6 +87,20 @@ AGWindowEndFrame(window);                            /* the compositor samples i
 /* or, when no frame arrived: AGWindowCancelFrame(window); */
 ```
 
+**AND A WINDOW'S BUFFER NOW WORKS TOO, AS FAR AS CHANNELS.** MEASURED, in three steps:
+
+1. A window's GPU buffer allocated through **GBM** cannot be rendered into at all: `glEGLImageTargetTexture2DOES` answers
+   `GL_INVALID_OPERATION` for it, on the same device, in the same context. The seam now allocates those buffers through
+   **EGL** instead (`AGGLTextureAllocate` + `EGL_MESA_image_dma_buf_export`), which imports and renders perfectly — the
+   difference is the ALLOCATOR, not the device, and the seam keeps GBM as the fallback.
+2. Both of a window's slots are allocated **together**, at the resize: this machine's EGL refuses to export a second
+   texture once the first buffer is being imported and rendered into elsewhere, so a lazily-made second slot fell back to
+   GBM and the whole path collapsed.
+3. The composition then runs — `webengine-window` commits its frames and the page's shape is on the glass — but **red and
+   blue are exchanged**: the page's `#ff0000` arrives as `(0,0,255)` and its `#0000c0` as `(192,0,0)`. The buffer exports
+   as **AB24** (RGBA in memory, which is what GL writes) and the compositor reads those bytes the other way round. That is
+   the open question, and the test SKIPS with that sentence rather than passing on a wrong picture.
+
 **MEASURED, AND IT STOPS SHORT OF THE WINDOW ON THIS MACHINE.** A destination this seam exported from its own EGL imports
 and composites perfectly — `webengine-gpu` asserts the page's red band at the top of that buffer, read back by the TEST and
 not by the engine (which is refused pixels of its own, so a pass cannot come from a hidden readback). A **window's** buffer
