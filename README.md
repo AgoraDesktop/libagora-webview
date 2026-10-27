@@ -247,6 +247,22 @@ cmake --build build -j"$(nproc)" && ctest --test-dir build --output-on-failure
 `appkit-readme-refs`-style guards are not here yet: this document names no test files, and the two tests are registered
 by name.
 
+## Input is in device pixels, sizes are in points
+
+The two are deliberately opposite, and getting it backwards is a bug a person finds straight away. Sizes are points and the
+device scale factor turns them into pixels; `wpe_input_pointer_event`'s coordinates are in the surface's **device pixels** and
+WebKit divides them by the factor itself. When this seam moved sizes to points it also stopped scaling the pointer, and at
+scale 2 a pointer at window y=120 reached the page as `clientY=90` instead of 180 — half the distance, which is why a drag
+selected the text ABOVE where the person pressed.
+
+The measurement is now a test: `webview-resize` sends a pointer at a known window position on a `--scale 2` output and the
+page reports the CSS pixel it saw.
+
+```
+resize: window y=120 -> view y=120.0 -> the page says clientY=180 (want 180.0)
+  ok   the page sees the pointer where the window put it
+```
+
 ## Selecting text, and a button mapping that was wrong
 
 Dragging over text selected nothing. The cause is in WebKit's WPE pointer path rather than in this component's mapping, and

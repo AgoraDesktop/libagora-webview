@@ -699,10 +699,17 @@ static void ag_view_title_changed(void *context, AGWebEngine *engine, const char
 {
 	NSPoint point = [self convertPoint:[event locationInWindow] fromView:nil];
 
-	/* **AND THE INPUT IS IN POINTS, BECAUSE THAT IS WHAT THE ENGINE SPEAKS NOW.** The device factor is WebKit's business:
-	 * a pointer at CSS pixel (160, 60) is the same place whether the page is rendered at 1x or at 2x, and a view that
-	 * multiplied here would put every click at 1.332 times the distance on this machine's panel. */
-	return NSMakePoint(point.x, [self bounds].size.height - point.y);
+	/* **THE INPUT IS IN DEVICE PIXELS, AND THAT IS THE OPPOSITE OF WHAT THE SIZE IS IN.** Sizes are points and the factor
+	 * turns them into pixels (see `AGWebEngineSetDeviceScaleFactor`), but `wpe_input_pointer_event`'s coordinates are in the
+	 * surface's DEVICE pixels and WebKit divides them by the factor itself to get CSS pixels. So a view that passed points
+	 * put every click at 1/factor of its distance: MEASURED at scale 2 on a 300-point-tall view, a pointer at window y=120
+	 * reached the page as `clientY=90` instead of 180 — half, and a person reported exactly that, as a drag selecting the
+	 * text ABOVE where they pressed. */
+	{
+		CGFloat scale = (_scale > 0.0) ? _scale : 1.0;
+
+		return NSMakePoint(point.x * scale, ([self bounds].size.height - point.y) * scale);
+	}
 }
 
 - (uint32_t)ag_timeForEvent:(NSEvent *)event

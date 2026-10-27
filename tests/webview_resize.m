@@ -83,7 +83,10 @@ int main(void)
 		"<html><head><title>resize probe</title><style>"
 		"  body { margin:0; background:#0000c0; }"
 		"  #band { height:40px; background:#ff0000; }"
-		"</style></head><body><div id=band></div></body></html>";
+		"</style></head><body><div id=band></div>"
+		"<script>document.addEventListener('mousemove',function(e){"
+		"document.title='resize probe client='+e.clientX+','+e.clientY;},true);</script>"
+		"</body></html>";
 	NSAutoreleasePool *pool = [[NSAutoreleasePool alloc] init];
 	NSApplication *application = [NSApplication sharedApplication];
 	AGResizeDelegate *delegate = [[AGResizeDelegate alloc] init];
@@ -130,6 +133,47 @@ int main(void)
 	 * the scale once, too early, reports 400x300 here — the fuzzy page. */
 	check(fabs(before.width - 400.0 * (double)scale) <= 2.0 && fabs(before.height - 300.0 * (double)scale) <= 2.0,
 	      "the engine renders at the output's scale, not at 1x resampled");
+
+	/* **WHERE DOES THE ENGINE THINK THE POINTER IS?** The page says which CSS pixel it saw, and the window said where the
+	 * pointer was — so the conversion from window coordinates to page coordinates is a number rather than an assumption.
+	 * This exists because a person reported that a drag selected the text ABOVE where they pressed. */
+	{
+		NSPoint window_point = NSMakePoint(60.0, 120.0);
+		NSEvent *move = [NSEvent mouseEventWithType:NSMouseMoved
+						  location:window_point
+					     modifierFlags:0
+						 timestamp:2.0
+					      windowNumber:[window windowNumber]
+						   context:nil
+					       eventNumber:9
+						clickCount:1
+						  pressure:0.0f];
+		NSPoint local = [view convertPoint:window_point fromView:nil];
+		int tries;
+		int client_y = -1;
+
+		[view mouseMoved:move];
+		for (tries = 0; tries < 30 && client_y < 0; tries++) {
+			pump(application, 0.05);
+			if ([view title] != nil) {
+				const char *title = [[view title] UTF8String];
+				const char *at = title != NULL ? strstr(title, "client=") : NULL;
+
+				if (at != NULL) {
+					int cx = -1;
+
+					if (sscanf(at + 7, "%d,%d", &cx, &client_y) != 2) {
+						client_y = -1;
+					}
+				}
+			}
+		}
+		printf("resize: window y=%.0f -> view y=%.1f -> the page says clientY=%d (want %.1f)\n",
+		       (double)window_point.y, (double)local.y, client_y,
+		       (double)([view bounds].size.height - window_point.y));
+		check(client_y >= 0 && fabs((double)client_y - ([view bounds].size.height - window_point.y)) <= 1.5,
+		      "the page sees the pointer where the window put it");
+	}
 
 	/* **AND A WINDOW RESIZE IS A RELAYOUT.** `-setFrame:` is the door NSWindow uses; a view that only watches
 	 * `-setFrameSize:` keeps its old frame and the page is stretched. */
