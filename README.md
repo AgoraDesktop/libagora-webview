@@ -225,9 +225,11 @@ by name.
 
 ## What is not here yet, in the order it is worth doing
 
-1. **Resize under load** and the scale factor (`wpe_view_backend_dispatch_set_device_scale_factor`), so a fractional
-   Agora output renders pages at its own device pixels.
-2. **Input in the present mode** — nothing about it is mode-specific, but nothing has asserted it either.
+1. **The device scale factor** (`wpe_view_backend_dispatch_set_device_scale_factor`), so a page renders at an output's own
+   device pixels instead of being scaled from points: the window probe sizes the engine to the buffer and that is right,
+   but the engine never tells WebKit the factor itself, so its text layout is at 1x scaled up.
+2. **Resize under load**, which nothing has driven yet: `-setFrameSize:` reaches `AGWebEngineSetSize`, and what a resize
+   does to a *loading* page has not been measured.
 
 ## Licence
 
