@@ -109,6 +109,32 @@ top of that buffer, read back by the TEST and not by the engine (which is refuse
 from a hidden readback). A window's buffer needed all four steps above; with them, `webengine-window` — nested, opt-in,
 asserted on the composited screenshot — passes too.
 
+## The demo: a page on the desktop
+
+```sh
+demo/agora-webview.sh                       # the built-in page
+demo/agora-webview.sh https://example.org   # a URL
+demo/agora-webview.sh --session 960x720     # plus Workspace and the Dock
+```
+
+`tools/webview.m` is the application: an `NSApplication`, an `NSWindow`, a `WKWebView` filling it, and a URL or a built-in
+page. It draws through the **AppKit** path (readback → `CGImage` → `-drawRect:`), because a view inside a CPU-drawn window
+with other views in it is that shape; the GPU presenter is a whole-window composition and belongs to a different door.
+
+**ONE THING IT TAUGHT THE CLASS:** a hand-pumped loop that runs the run loop and not `-[NSApplication updateWindows]` never
+calls `-drawRect:` at all — measured as an application that loaded its page, printed the right title, and painted nothing.
+`webview-app` asserts the page's own colours in the composited frame, so that failure cannot come back quietly.
+
+## Input in the present mode
+
+Nothing about input is mode-specific — the same four doors dispatch to the same view backend — but nothing had asserted it
+either. `webengine-gpu` now sends a pointer motion and a key in the GPU-present mode and reads the **destination's** pixels
+for the two colours the page paints, so "input works when the engine is not reading its frames back" is a measurement and
+not an assumption.
+
+**And it found a test bug worth recording**: the first version of that page set its base colours with `style="…"` attributes,
+and an inline style beats any `:hover` rule — so the hover painted nothing, in either mode, and looked like a broken door.
+
 ## Partial damage
 
 WPE hands its host a finished buffer and no damage, so the seam computes it **while copying**: each pixel is compared
@@ -183,6 +209,7 @@ measured rather than assumed, and both are in `AGWebEngine-WPE.c` where they bit
 | `webengine-teardown` | two engines can be made and dropped in one process — the lifetime a real application has on `-terminate:` | nothing |
 | `appkit-webview` | the CLASS, offscreen: the page arrives **upright** (the rep's own orientation is measured first), the title is the page's, and the pointer and the wheel reach the page through the view's own y-flip and scale | nothing |
 | `webengine-gpu` | the **present mode**: the page composited into a GPU buffer with no readback — the destination is read back by the test, and the engine is asserted to have no pixels of its own | EGL |
+| `webview-app` | the **demo application**: AppKit paints the view into a window's buffer and the compositor shows the page — nested and opt-in, asserted on the composited screenshot | a compositor |
 | `webengine-window` | the same, into a real **window's** own buffer, asserted on the composited screenshot — nested and opt-in (`AGORA_ALLOW_NESTED=1`) | EGL + a compositor that imports dma-buf |
 | `webengine-egl` | the same page through the **EGL export**: imported, blitted flipped, read back — asserted as a red band at the top and blue below, because a flipped blit or a channel swap is a frame that is not the page. SKIPS when the machine's EGL cannot import a dma-buf | EGL |
 | `webengine-input` | the page hears the pointer (`:hover`), the button (an inline style set by the page's own script), the keys (a `keydown` listener with no field focused) and the wheel (a band below the fold comes into view) — each asserted as a colour in the engine's own frame | nothing |

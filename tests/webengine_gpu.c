@@ -144,10 +144,22 @@ static int read_destination(AGGLContext *gl, int fd, int stride, unsigned int fo
 
 int main(void)
 {
+	/* **THE COLOURS COME FROM A STYLESHEET, NOT FROM `style=` ATTRIBUTES, AND THAT IS THE WHOLE OF WHY THIS PAGE
+	 * HOVERS.** An inline style beats any selector short of `!important`, so a `:hover` rule that sets the same property
+	 * on an element whose colour was set inline changes nothing — MEASURED: the hover produced no repaint at all, in
+	 * either export mode, until the base colours moved into the sheet. */
 	static const char *page =
-		"<html><body style='margin:0'>"
-		"<div style='height:40px;background:#ff0000'></div>"
-		"<div style='height:160px;background:#0000c0'></div>"
+		"<html><head><style>"
+		"  body { margin:0; }"
+		"  #top { height:40px; background:#ff0000; }"
+		"  #h { height:40px; background:#002040; }"
+		"  #h:hover { background:#00c000; }"
+		"  #k { height:40px; background:#400020; }"
+		"  #body { height:80px; background:#0000c0; }"
+		"</style></head><body>"
+		"<div id=top></div><div id=h></div><div id=k></div><div id=body></div>"
+		"<script>window.addEventListener('keydown',function(){"
+		"document.getElementById('k').style.background='#ff0000';});</script>"
 		"</body></html>";
 	static const AGWebEngineCallbacks callbacks = { on_load_changed, NULL, on_damaged };
 	struct App app;
@@ -162,6 +174,8 @@ int main(void)
 	int waited;
 	uint32_t top;
 	uint32_t middle;
+#define HOVER_Y 60
+#define KEY_Y 100
 
 	memset(&app, 0, sizeof app);
 	app.engine = AGWebEngineCreateWithExport(WIDTH, HEIGHT, AGWebExportEGLPresent, &callbacks, &app);
@@ -231,7 +245,7 @@ int main(void)
 			if ((int)AGWebEngineFramesPresented(app.engine) != frames) {
 				if (read_destination(gl, fd, stride, fourcc, modifier, pixels)) {
 					top = pixels[20 * WIDTH + 160];
-					middle = pixels[100 * WIDTH + 160];
+					middle = pixels[160 * WIDTH + 160];
 					if (top == 0x00FF0000u && middle == 0x000000C0u) {
 						break;
 					}
@@ -245,6 +259,56 @@ int main(void)
 	printf("gpu: %d frame(s) composited, %d damage callback(s)\n", app.frames, app.damaged);
 	printf("gpu: destination top 0x%06x, middle 0x%06x (clear colour was 0x%06x)\n", top, middle, DESTINATION_CLEAR);
 	free(pixels);
+
+	/* **AND INPUT WORKS IN THIS MODE, BECAUSE NOTHING ABOUT IT IS MODE-SPECIFIC — WHICH IS WORTH ASSERTING RATHER THAN
+	 * ASSUMING.** The page has a `:hover` box and a `keydown` listener, both of which paint; the pointer and the key go
+	 * through the same doors the shm tests use, and the proof is the DESTINATION's pixels, read by this test. */
+	{
+		uint32_t *probe = malloc((size_t)WIDTH * HEIGHT * 4u);
+		int started;
+		int hovered = 0;
+		int keyed = 0;
+
+		if (probe != NULL) {
+			int frames_before = (int)AGWebEngineFramesPresented(app.engine);
+
+			AGWebEnginePointerMotion(app.engine, WIDTH / 2, HOVER_Y, 0, 1000);
+			started = now_ms();
+			while (now_ms() - started < 4000 && !hovered) {
+				AGWebEngineIterate(app.engine);
+				if (read_destination(gl, fd, stride, fourcc, modifier, probe) &&
+				    probe[(size_t)HOVER_Y * WIDTH + WIDTH / 2] == 0x0000C000u) {
+					hovered = 1;
+				}
+				nap(2);
+			}
+			printf("gpu: frames %d -> %d around the pointer, colour at (%d,%d) is 0x%06x\n", frames_before,
+			       (int)AGWebEngineFramesPresented(app.engine), WIDTH / 2, HOVER_Y,
+			       probe != NULL && read_destination(gl, fd, stride, fourcc, modifier, probe) ?
+				       probe[(size_t)HOVER_Y * WIDTH + WIDTH / 2] : 0xFFFFFFFFu);
+			AGWebEngineKey(app.engine, 0x0061u /* XKB_KEY_a */, 38 /* KEY_A */, 0, 1, 2000);
+			started = now_ms();
+			while (now_ms() - started < 4000 && !keyed) {
+				AGWebEngineIterate(app.engine);
+				if (read_destination(gl, fd, stride, fourcc, modifier, probe) &&
+				    probe[(size_t)KEY_Y * WIDTH + WIDTH / 2] == 0x00FF0000u) {
+					keyed = 1;
+				}
+				nap(2);
+			}
+			free(probe);
+		}
+		printf("gpu: pointer %s, key %s\n", hovered ? "reached the page" : "did NOT reach the page",
+		       keyed ? "reached the page" : "did NOT reach the page");
+		if (!hovered || !keyed) {
+			fprintf(stderr, "gpu: input did not reach the page in the present mode\n");
+			AGGLDeleteTexture(gl, destination);
+			close(fd);
+			AGGLContextDestroy(gl);
+			AGWebEngineDestroy(app.engine);
+			return 1;
+		}
+	}
 
 	/* **THE ENGINE MUST HAVE NO PIXELS OF ITS OWN.** If it does, the readback ran, and the mode this test exists to prove
 	 * is not the one that ran. */
@@ -278,7 +342,7 @@ int main(void)
 		return 1;
 	}
 	if (middle != 0x000000C0u) {
-		fprintf(stderr, "gpu: the destination's middle is 0x%06x, want 0x0000c0\n", middle);
+		fprintf(stderr, "gpu: the destination's body is 0x%06x at y=160, want 0x0000c0\n", middle);
 		return 1;
 	}
 	printf("gpu: ok — the page was composited into a GPU buffer, upright, with no readback\n");

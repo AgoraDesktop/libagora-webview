@@ -84,6 +84,14 @@ add_test(NAME webengine-window
 set_tests_properties(webengine-window PROPERTIES SKIP_RETURN_CODE 77
   ENVIRONMENT "${_agora_webview_test_env}")
 
+# **AND THE APPLICATION, NESTED: AppKit → a window's buffer → the compositor → the glass.** Every other test stops short of
+# this hop; it is what `demo/agora-webview.sh` starts, and the runner asserts the page's colours in the composed frame.
+add_test(NAME webview-app
+  COMMAND "${CMAKE_CURRENT_SOURCE_DIR}/run-webview-app.sh"
+          "$<TARGET_FILE:agora-webview>" "${AGORA_WINDOW_SERVER_BINARY}")
+set_tests_properties(webview-app PROPERTIES SKIP_RETURN_CODE 77
+  ENVIRONMENT "${_agora_webview_test_env}")
+
 add_test(NAME webengine-page
   COMMAND "${CMAKE_CURRENT_SOURCE_DIR}/run-webengine.sh"
           "$<TARGET_FILE:webengine_probe>" "${AGORA_WINDOW_SERVER_BINARY}")

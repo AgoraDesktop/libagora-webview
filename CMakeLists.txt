@@ -66,6 +66,12 @@ target_link_libraries(WebView
 
 set_target_properties(WebView PROPERTIES OUTPUT_NAME agora-webview)
 
+# **AND ONE APPLICATION, BECAUSE A CLASS NOBODY CAN LOOK AT IS A CLASS NOBODY TRUSTS.** Not installed as a tool: it is a
+# demo client, started by `demo/agora-webview.sh`, and it is what makes `WKWebView` a thing on a screen rather than a thing
+# in a header.
+add_executable(agora-webview tools/webview.m)
+target_link_libraries(agora-webview PRIVATE WebView)
+
 enable_testing()
 add_subdirectory(tests)
 

@@ -53,6 +53,7 @@
 
 #include <math.h>
 #include <stdio.h>
+#include <stdlib.h>
 #include <string.h>
 
 #define AG_WEBVIEW_PUMP_INTERVAL 0.016
@@ -541,6 +542,15 @@ static void ag_view_title_changed(void *context, AGWebEngine *engine, const char
 		return;
 	}
 	cg = [[NSGraphicsContext currentContext] CGContext];
+	if (getenv("WK_WEBVIEW_DIAG") != NULL) {
+		int width = 0;
+		int height = 0;
+
+		AGWebEngineFrameSize((AGWebEngine *)_engine, &width, &height);
+		fprintf(stderr, "  DIAG draw: context %p cg %p image %p engine frame %dx%d bounds %.0fx%.0f\n",
+			(void *)[NSGraphicsContext currentContext], (void *)cg, (void *)_image, width, height,
+			bounds.size.width, bounds.size.height);
+	}
 	if (cg == NULL) {
 		return;
 	}
