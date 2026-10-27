@@ -228,11 +228,11 @@ by name.
 1. **The device scale factor** (`wpe_view_backend_dispatch_set_device_scale_factor`), so a page renders at an output's own
    device pixels instead of being scaled from points: the window probe sizes the engine to the buffer and that is right,
    but the engine never tells WebKit the factor itself, so its text layout is at 1x scaled up.
-2. **A window is invisible in the composite at scale 1.0 when the application centres it.** MEASURED while capturing a page: with
-   `AGORA_DPI=72` (scale 1) a `WKWebView` window at the centre of a 1280x940 output is drawn by AppKit and never appears on the
-   glass, while the same application at the machine's own 1.332 scale — and at scale 1 with the window near the bottom-left —
-   is fine. Repro: `AGORA_DPI=72 AGORA_SCREENSHOT=/tmp/x.ppm AGORA_SECONDS=5 demo/agora-webview.sh 1280x940 <url>`. Not chased
-   yet; it is a placement question in the seam or in `NSWindow`, not in the page.
+2. **A screenshot of a window needs the compositor stopped while the window is still up.** MEASURED, the hard way: an
+   application given `--seconds 3` had already exited when the server was signalled, so the frame it wrote was an empty
+   desktop — and that looked exactly like "the window is never composited at scale 1.0", which is what I recorded here
+   before checking. `demo/agora-webview.sh` now runs a capture in the background and stops the compositor first
+   (`AGORA_CAPTURE_AFTER`, 8 seconds by default), and `webview-app`'s runner always did.
 3. **Resize under load**, which nothing has driven yet: `-setFrameSize:` reaches `AGWebEngineSetSize`, and what a resize
    does to a *loading* page has not been measured.
 

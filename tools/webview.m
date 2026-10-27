@@ -36,6 +36,8 @@
 #import <Foundation/NSURL.h>
 #import <Foundation/NSString.h>
 
+#include <limits.h>
+#include <time.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <stdlib.h>
@@ -97,11 +99,21 @@ int main(int argc, char **argv)
 	int seconds = 0;
 	int width = 0;
 	int height = 0;
+	int at_x = INT_MIN;		/* frame origin override, for the placement tests */
+	int at_y = INT_MIN;
 	int i;
 
 	for (i = 1; i < argc; i++) {
 		if (strcmp(argv[i], "--seconds") == 0 && i + 1 < argc) {
 			seconds = atoi(argv[++i]);
+		} else if (strcmp(argv[i], "--at") == 0 && i + 1 < argc) {
+			int x = 0;
+			int y = 0;
+
+			if (sscanf(argv[++i], "%d,%d", &x, &y) == 2) {
+				at_x = x;
+				at_y = y;
+			}
 		} else if (strcmp(argv[i], "--size") == 0 && i + 1 < argc) {
 			int w = 0;
 			int h = 0;
@@ -113,7 +125,7 @@ int main(int argc, char **argv)
 		} else if (argv[i][0] != '-') {
 			url = [NSURL URLWithString:[NSString stringWithUTF8String:argv[i]]];
 		} else {
-			fprintf(stderr, "usage: %s [URL] [--seconds N] [--size WxH]\n", argv[0]);
+			fprintf(stderr, "usage: %s [URL] [--seconds N] [--size WxH] [--at X,Y]\n", argv[0]);
 			return 2;
 		}
 	}
@@ -127,7 +139,7 @@ int main(int argc, char **argv)
 	 * than near its top. Both are measured rather than stylistic: this is what the first screenshot of osnews.com showed.
 	 */
 	{
-		NSScreen *screen = [NSScreen mainScreen];
+		NSScreen *screen = getenv("WK_WEBVIEW_NO_SCREEN") != NULL ? nil : [NSScreen mainScreen];
 		NSRect visible = (screen != nil) ? [screen visibleFrame] : NSMakeRect(0.0, 0.0, 1280.0, 940.0);
 
 		if (width <= 0 || height <= 0) {
@@ -137,6 +149,10 @@ int main(int argc, char **argv)
 		content = NSMakeRect(visible.origin.x + (visible.size.width - (CGFloat)width) / 2.0,
 				     visible.origin.y + (visible.size.height - (CGFloat)height) / 2.0,
 				     (CGFloat)width, (CGFloat)height);
+		if (at_x != INT_MIN && at_y != INT_MIN) {
+			content.origin.x = (CGFloat)at_x;
+			content.origin.y = (CGFloat)at_y;
+		}
 	}
 
 	window = [[NSWindow alloc] initWithContentRect:content

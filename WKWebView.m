@@ -37,6 +37,7 @@
 #import <AgoraWebView/WKWebView.h>
 
 #import <AppKit/NSGraphicsContext.h>
+#import <AppKit/NSColor.h>
 #import <AppKit/NSWindow.h>
 #import <AppKit/NSEvent.h>
 #import <AppKit/platform/AGKeyboard.h>
@@ -538,9 +539,6 @@ static void ag_view_title_changed(void *context, AGWebEngine *engine, const char
 	(void)dirtyRect;
 	bounds = [self bounds];
 	[self ag_updateImage];
-	if (_image == NULL) {
-		return;
-	}
 	cg = [[NSGraphicsContext currentContext] CGContext];
 	if (getenv("WK_WEBVIEW_DIAG") != NULL) {
 		int width = 0;
@@ -552,6 +550,20 @@ static void ag_view_title_changed(void *context, AGWebEngine *engine, const char
 			bounds.size.width, bounds.size.height);
 	}
 	if (cg == NULL) {
+		return;
+	}
+	if (_image == NULL) {
+		/* **A VIEW WITH NO FRAME YET IS STILL A VIEW, AND IT PAINTS ITS PAGE'S BACKGROUND.** This used to return early, and
+		 * the consequence was a window that showed NOTHING — not a blank page, nothing — until WebKit's first frame
+		 * arrived, because the AppKit paints what views draw and commits what it painted. A browser shows white while it
+		 * waits, and now so does this.
+		 *
+		 * **AND A WARNING ABOUT CHASING SYMPTOMS FROM A SCREENSHOT**, because this comment used to claim more than it knew:
+		 * the invisibility I first blamed on this was a CAPTURE artefact (see `demo/agora-webview.sh` — a frame is written
+		 * when the compositor stops, and an application that has already exited has no window in it). The change is still
+		 * right for the reason above; it was not the cause of the disappearance. */
+		[[NSColor whiteColor] setFill];
+		NSRectFill(bounds);
 		return;
 	}
 	/* **NO FLIP, AND THAT IS THE MEASUREMENT RATHER THAN A SIMPLIFICATION.** `CGContextDrawImage` puts the image's FIRST
