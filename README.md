@@ -122,6 +122,13 @@ Two symptoms reported from the running demo, and both were real:
   stayed 1.0 for the life of the view, so the page was rendered at 1x and resampled into a 1.332x surface. The factor is
   now asked of the window every time, and pushed only when it changes.
 
+- **And a resize showed the page stretching before it reflowed.** The frame on screen while WebKit lays the page out again is
+  the PREVIOUS size, and `-drawRect:` drew it into the NEW bounds — a bitmap squashed to fit. A stale frame is now drawn at
+  the size it was painted, anchored top-left, with the page's background where the window has grown; and the new frame is
+  requested in the same pass as the resize rather than at the next timer turn. MEASURED in `appkit-webview`: growing the
+  view by 160 points and drawing immediately leaves the page's own pixels untouched and the new width white — drawing the
+  stale frame into the full bounds instead turns that white area blue, which is the bug.
+
 `webview-resize` runs the class in a **real window at `--scale 2`** and asserts the outcome both ways: 400x300 points gives
 an 800x600 frame, and a window grown to 520x378 gives 1040x756. Disabling the fix reproduces the reported bug exactly — the
 frame stays 800x600 while the view grows, which is a page stretched rather than re-laid out.

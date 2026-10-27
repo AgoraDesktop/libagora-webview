@@ -77,11 +77,16 @@ static void check(int ok, const char *name)
 }
 @end
 
+static NSBitmapImageRep *new_rep_sized(int width, int height)
+{
+	return [[NSBitmapImageRep alloc] initWithBitmapDataPlanes:NULL pixelsWide:width pixelsHigh:height
+		bitsPerSample:8 samplesPerPixel:4 hasAlpha:YES isPlanar:NO
+		colorSpaceName:NSCalibratedRGBColorSpace bytesPerRow:width * 4 bitsPerPixel:32];
+}
+
 static NSBitmapImageRep *new_rep(void)
 {
-	return [[NSBitmapImageRep alloc] initWithBitmapDataPlanes:NULL pixelsWide:W pixelsHigh:H
-		bitsPerSample:8 samplesPerPixel:4 hasAlpha:YES isPlanar:NO
-		colorSpaceName:NSCalibratedRGBColorSpace bytesPerRow:W * 4 bitsPerPixel:32];
+	return new_rep_sized(W, H);
 }
 
 /* **WHICH WAY UP IS A REP?** A magenta strip is filled at the BOTTOM of the view's own rectangle — the view's y = 0,
@@ -299,6 +304,38 @@ int main(void)
 			}
 		}
 		check(scrolled, "the wheel reached the page (the band below the fold came into view)");
+	}
+
+	/* 4. **A STALE FRAME IS NOT STRETCHED, WHICH IS THE NOISE A RESIZE USED TO MAKE.** Reported from the running demo: a
+	 * window being dragged showed the page stretching and shrinking before it reflowed. The frame on screen while WebKit
+	 * lays the page out again is the PREVIOUS size, and drawing it into the new bounds distorts it; it is now drawn where
+	 * it belongs, with the page's background where the window has grown. Asserted without pumping the engine, so the frame
+	 * really is the stale one: the page must stay at its own size in the top-left and the new width must be background. */
+	{
+		NSBitmapImageRep *grown = new_rep_sized(W + 160, H);
+		NSColor *page_top;
+		NSColor *before_pixel;
+		NSColor *new_area;
+
+		/* The colour at a point INSIDE the page before the resize, so "the stale frame kept its content" is a
+		 * comparison rather than a guess about which band the page happens to be showing — step 3 scrolled it. */
+		before_pixel = [[rep colorAtX:160 y:20] retain];
+		[view setFrameSize:NSMakeSize((CGFloat)(W + 160), (CGFloat)H)];
+		[NSGraphicsContext setCurrentContext:[NSGraphicsContext graphicsContextWithBitmapImageRep:grown]];
+		[[NSColor magentaColor] setFill];
+		[[NSBezierPath bezierPathWithRect:NSMakeRect(0.0, 0.0, (CGFloat)(W + 160), (CGFloat)H)] fill];
+		[view drawRect:[view bounds]];
+		page_top = [grown colorAtX:160 y:20];
+		new_area = [grown colorAtX:W + 120 y:H / 2];
+		printf("appkit_webview: after growing the view, the page at (160,20) is %.2f %.2f %.2f and the new width is "
+		       "%.2f %.2f %.2f\n", [page_top redComponent], [page_top greenComponent], [page_top blueComponent],
+		       [new_area redComponent], [new_area greenComponent], [new_area blueComponent]);
+		check(page_top != nil && [page_top isEqual:before_pixel],
+		      "the stale frame keeps the page's content, drawn at its own size");
+		check([new_area redComponent] > 0.9 && [new_area greenComponent] > 0.9 && [new_area blueComponent] > 0.9,
+		      "and the width the window gained is the page's background, not a stretched page");
+		[before_pixel release];
+		[grown release];
 	}
 
 	[rep release];

@@ -274,6 +274,10 @@ static void ag_view_title_changed(void *context, AGWebEngine *engine, const char
 	_scale = scale;
 	AGWebEngineSetDeviceScaleFactor((AGWebEngine *)_engine, (double)scale);
 	AGWebEngineSetSize((AGWebEngine *)_engine, width, height);
+	/* **AND THE NEW FRAME IS REQUESTED NOW, NOT AT THE NEXT TURN OF THE TIMER.** WebKit's relayout is asynchronous, so this
+	 * cannot make it synchronous — but it starts it in the same pass as the resize rather than up to 16 ms later, which is
+	 * the difference between one stale paint and several. */
+	AGWebEngineIterate((AGWebEngine *)_engine);
 }
 
 - (void)ag_pump:(NSTimer *)timer
@@ -619,11 +623,31 @@ static void ag_view_title_changed(void *context, AGWebEngine *engine, const char
 		return;
 	}
 	/* **NO FLIP, AND THAT IS THE MEASUREMENT RATHER THAN A SIMPLIFICATION.** `CGContextDrawImage` puts the image's FIRST
-	 * ROW at the TOP of the destination rectangle in USER SPACE, and this view's space is unflipped — so drawing into
-	 * `(0, 0, w, h)` lands the page's top row at the view's top with no transform at all. The first version of this
+	 * ROW at the TOP of the destination rectangle in USER SPACE, and this view's space is unflipped — so a rectangle
+	 * whose top is the view's top lands the page's top row there with no transform at all. The first version of this
 	 * method flipped the CTM "because the image is top-down", and MEASURED it drew every page upside down: the red band
-	 * that belongs at the top came out at the bottom of the surface. A flip here is a double flip. */
-	CGContextDrawImage(cg, CGRectMake(0.0, 0.0, bounds.size.width, bounds.size.height), (CGImageRef)_image);
+	 * that belongs at the top came out at the bottom of the surface. A flip here is a double flip.
+	 *
+	 * **AND THE FRAME IS DRAWN AT ITS OWN SIZE, WHICH IS WHAT REMOVES THE NOISE DURING A RESIZE.** Reported by a person
+	 * using the demo: dragging a window edge showed the page STRETCHING and SHRINKING before it reflowed. That was this
+	 * method drawing the previous frame into the NEW bounds — a bitmap squashed to fit for as long as WebKit takes to lay
+	 * the page out again. A stale frame is now drawn where it belongs, at the size it was painted, anchored top-left, and
+	 * whatever the window has gained is the page's own background. A page that is momentarily too small is honest; a page
+	 * distorted to fit is the artefact. */
+	{
+		CGFloat scale = (_scale > 0.0) ? _scale : 1.0;
+		CGFloat image_points_w = (CGFloat)_pixelWidth / scale;
+		CGFloat image_points_h = (CGFloat)_pixelHeight / scale;
+
+		/* The area the frame does not cover — a window that has just grown, or the first paint after a shrink — is the
+		 * page's background, which is what a browser shows before its content is laid out. */
+		if (image_points_w < bounds.size.width || image_points_h < bounds.size.height) {
+			[[NSColor whiteColor] setFill];
+			NSRectFill(bounds);
+		}
+		CGContextDrawImage(cg, CGRectMake(0.0, bounds.size.height - image_points_h, image_points_w, image_points_h),
+				   (CGImageRef)_image);
+	}
 }
 
 /* ----------------------------------------------------------------------------------------------------------------
