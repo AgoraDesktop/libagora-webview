@@ -59,6 +59,36 @@ Written down in `AGWebEngine-WPE.c` in the order it has to happen. The three fin
 The web process is **sandboxed** (bubblewrap) and needs no environment variable here; the `WEBKIT_DISABLE_SANDBOX…`
 escape hatch is deliberately unused by this component and its tests.
 
+## The class: `WKWebView`
+
+`WKWebView` is an `NSView` that owns an engine: it loads, it draws the engine's frame in `-drawRect:` through a `CGImage`,
+and it forwards the pointer, the buttons, the keys and the wheel. The engine is pumped by an `NSTimer` at 60 Hz on the run
+loop the view was created in — the engine's work is asynchronous, so the damage callback only marks the view and AppKit
+decides when a paint happens.
+
+```
+WKWebView(frame)
+loadRequest: / loadHTMLString:baseURL: / reload
+title / URL / estimatedProgress / isLoading / frameSizeInPixels
+navigationDelegate  →  webView:didCommitNavigation: / didFinishNavigation: / didFailNavigation:withError:
+```
+
+**WHAT IT DELIBERATELY DOES NOT HAVE, AND WHY THAT IS NOT AN OVERSIGHT.** WebKit's `WKWebView` brings a configuration
+object, a content controller with script message handlers, a back/forward list, process pools, `-evaluateJavaScript:`, a
+find bar and downloads — every one of which needs a door this tree does not have. They are **absent, not
+declared-and-refused**: a ported program that needs them fails at compile time, where it asked, instead of at 2 a.m. as a
+callback that never came. What is here is what the seam can back.
+
+Two things the class cost, both measured and both recorded at the line that pays for them:
+
+- **`CGContextDrawImage` needs NO flip here.** Its first row goes to the top of the destination rectangle in user space,
+  and the view's space is unflipped — so the page lands upright with no transform. The first version flipped the CTM
+  "because the image is top-down" and drew every page upside down; the test caught it because it measures which way a
+  bitmap rep's rows run before it calls anything "the top".
+- **Every frame is copied, every time.** The first version returned early once an image existed — "the engine draws into
+  it below" — and nothing ever did: the view showed the first frame it saw, for ever. A page that loads and then never
+  changes its pixels is exactly what that looks like.
+
 ## Input
 
 Pointer motion, buttons and keys are implemented and each is asserted by a colour the page paints. Two behaviours were
@@ -90,6 +120,7 @@ measured rather than assumed, and both are in `AGWebEngine-WPE.c` where they bit
 |---|---|---|
 | `webengine-page` | a real page — red strip above, blue body below — reaches the glass: the **composited screenshot** is asserted, along with all three load stages, the title, and two drawn frames (the first is the blank page) | `window-server` built (else SKIP 77) |
 | `webengine-teardown` | two engines can be made and dropped in one process — the lifetime a real application has on `-terminate:` | nothing |
+| `appkit-webview` | the CLASS, offscreen: the page arrives **upright** (the rep's own orientation is measured first), the title is the page's, and the pointer and the wheel reach the page through the view's own y-flip and scale | nothing |
 | `webengine-input` | the page hears the pointer (`:hover`), the button (an inline style set by the page's own script), the keys (a `keydown` listener with no field focused) and the wheel (a band below the fold comes into view) — each asserted as a colour in the engine's own frame | nothing |
 
 ```sh
@@ -103,13 +134,12 @@ by name.
 
 ## What is not here yet, in the order it is worth doing
 
-1. **A `WKWebView`-shaped class** (`NSView` in this component, drawing `AGWebEngineDraw`'s pixels through a `CGImage`,
-   driven by the AppKit's run loop calling `AGWebEngineIterate`, forwarding `AGEvent`s through the input doors scaled by
-   the buffer scale). The drawing half is the small half; the run-loop integration is the interesting one.
-2. **Resize under load** and the scale factor (`wpe_view_backend_dispatch_set_device_scale_factor`), so a fractional
+1. **Resize under load** and the scale factor (`wpe_view_backend_dispatch_set_device_scale_factor`), so a fractional
    Agora output renders pages at its own device pixels.
-3. **The EGL export path**, for a caller that composites on the GPU: the same seam, `AGGLTextureFromImage` instead of a
+2. **The EGL export path**, for a caller that composites on the GPU: the same seam, `AGGLTextureFromImage` instead of a
    memcpy.
+3. **Partial damage**: the view redraws its whole rect when a frame arrives, which is right for a page (it is what a page
+   is) but is not free at 1280x800. The engine knows which rectangle changed; nothing asks it yet.
 
 ## Licence
 

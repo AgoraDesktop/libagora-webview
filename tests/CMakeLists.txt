@@ -41,6 +41,17 @@ add_test(NAME webengine-input COMMAND webengine_input)
 set_tests_properties(webengine-input PROPERTIES SKIP_RETURN_CODE 77
   ENVIRONMENT "${_agora_webview_test_env}")
 
+# **THE CLASS, OFFSHORE: no compositor, no window, a bitmap rep for a surface.** A page must arrive upright (the rep's
+# own orientation is measured first, so "upright" is a claim about the view rather than about the surface), the title
+# must be the page's, and the pointer and the wheel must reach the page through the view's own conversion — which is
+# where a wrong y flip or a forgotten buffer scale would hide.
+add_executable(appkit_webview appkit_webview.m)
+target_link_libraries(appkit_webview PRIVATE WebView)
+
+add_test(NAME appkit-webview COMMAND appkit_webview)
+set_tests_properties(appkit-webview PROPERTIES SKIP_RETURN_CODE 77
+  ENVIRONMENT "${_agora_webview_test_env}")
+
 add_test(NAME webengine-page
   COMMAND "${CMAKE_CURRENT_SOURCE_DIR}/run-webengine.sh"
           "$<TARGET_FILE:webengine_probe>" "${AGORA_WINDOW_SERVER_BINARY}")

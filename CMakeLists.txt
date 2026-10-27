@@ -20,7 +20,7 @@
 
 cmake_minimum_required(VERSION 3.24)
 
-project(AgoraWebView LANGUAGES C)
+project(AgoraWebView LANGUAGES C OBJC)
 
 set(CMAKE_INSTALL_RPATH "\$ORIGIN")
 include(GNUInstallDirs)
@@ -51,7 +51,8 @@ file(MAKE_DIRECTORY "${_agora_webview_include_dir}")
 file(CREATE_LINK "${CMAKE_CURRENT_SOURCE_DIR}" "${_agora_webview_include_dir}/AgoraWebView" SYMBOLIC)
 
 add_library(WebView SHARED
-  AGWebEngine-WPE.c)
+  AGWebEngine-WPE.c
+  WKWebView.m)
 
 target_include_directories(WebView PUBLIC
   "$<BUILD_INTERFACE:${_agora_webview_include_dir}>"
@@ -74,7 +75,7 @@ install(TARGETS WebView
     LIBRARY DESTINATION ${CMAKE_INSTALL_LIBDIR}
     RUNTIME DESTINATION ${CMAKE_INSTALL_BINDIR})
 
-install(FILES AGWebEngine.h
+install(FILES AGWebEngine.h WKWebView.h
     DESTINATION ${CMAKE_INSTALL_INCLUDEDIR}/AgoraWebView)
 
 include(CMakePackageConfigHelpers)
