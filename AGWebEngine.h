@@ -88,6 +88,48 @@ const char *AGWebEngineURI(AGWebEngine *engine);
 const char *AGWebEngineTitle(AGWebEngine *engine);
 double AGWebEngineProgress(AGWebEngine *engine);
 
+/* ================================================================================================================
+ * INPUT — THE OTHER HALF OF BEING A VIEW
+ *
+ * **EVERY COORDINATE HERE IS IN THE ENGINE'S OWN DEVICE PIXELS, WITH (0,0) AT THE PAGE'S TOP LEFT**, which is the same
+ * space `AGWebEngineDraw` writes. That is not the AppKit's space: an `NSEvent` arrives in points, so the view that
+ * forwards one multiplies by the buffer scale before calling these doors — the same number `AGWindowBeginFrameSized`
+ * answers with. A caller that skips that step sends every click to the wrong place on a fractional display, which is
+ * the sort of bug that only shows up on the one machine that has one.
+ *
+ * The modifier mask is `AGModifier…` from `AGWindowServer.h` — the AppKit's own vocabulary, because the events being
+ * forwarded are `AGEvent`s — and it is mapped to WPE's different numbering here rather than by every caller.
+ * ================================================================================================================ */
+
+/* The pointer moved. `modifiers` may be 0. */
+void AGWebEnginePointerMotion(AGWebEngine *engine, int x, int y, uint32_t modifiers, uint32_t time_ms);
+
+/* A pointer button changed state. `button` is the EVDEV code (`AGEvent.button`: 0x110 left, 0x111 middle, 0x112 right)
+ * and `pressed` is 1 for down. WebKit tracks the hover state from these and from motion, so a click without a preceding
+ * motion lands where the coordinates say and nowhere else.
+ *
+ * **THE FIRST CLICK A PAGE EVER RECEIVES IS TAKEN BY THE FOCUS, WHICH IS THE BROWSER BEHAVIOUR AND NOT A BUG HERE.**
+ * MEASURED on a page whose listeners paint it: with the pointer already hovering, the first press/release pair produced a
+ * `mousemove` and a `mousedown`, and the second produced the `click`. A caller that needs a click on an unfocused view —
+ * which is what a `WebView` in a window nobody has clicked yet is — sends one to take the focus and the real one after
+ * it, exactly as a person would. */
+void AGWebEnginePointerButton(AGWebEngine *engine, int x, int y, uint32_t button, int pressed, uint32_t modifiers,
+			      uint32_t time_ms);
+
+/* **THERE IS NO WHEEL DOOR YET, AND THE REASON IS A MEASUREMENT RATHER THAN AN OMISSION.** It was implemented and
+ * tested: `wpe_view_backend_dispatch_axis_event` in both of WPE's wire forms, on every axis number, at magnitudes from
+ * one notch to five thousand pixels, against a long document and against a `div` with `overflow:auto`, with the pointer
+ * inside and the page focused — and not one combination moved a pixel. Keys, pointer motion and buttons all arrive
+ * through the same input client, so what is missing is specific to the axis path, and a door that provably does nothing
+ * is worse than a note saying so. See `AGWebEngine-WPE.c` for the full matrix; the next experiment is an EGL-export host,
+ * where WebKit's asynchronous scrolling lives. */
+
+/* **A KEY, AS THE PAGE WILL SEE IT.** `keysym` is xkb's `XKB_KEY_…` and what the page's `key` is derived from;
+ * `hardware_keycode` is the evdev code (`AGEvent.keycode`) and what WebKit hands the page as `keyCode`/`code`; both are
+ * needed, because a layout is a mapping between them and a page can ask for either. `pressed` is 1 for down. */
+void AGWebEngineKey(AGWebEngine *engine, uint32_t keysym, uint32_t hardware_keycode, uint32_t modifiers, int pressed,
+		    uint32_t time_ms);
+
 /* The frame's size in device pixels, which is the size it was last asked to be — a caller's own buffer questions
  * answered without guessing. */
 void AGWebEngineFrameSize(AGWebEngine *engine, int *width, int *height);

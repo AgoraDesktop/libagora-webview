@@ -30,6 +30,17 @@ add_test(NAME webengine-teardown COMMAND webengine_teardown)
 set_tests_properties(webengine-teardown PROPERTIES SKIP_RETURN_CODE 77
   ENVIRONMENT "${_agora_webview_test_env}")
 
+# **INPUT, ASSERTED BY COLOUR RATHER THAN BY DISPATCH.** Four doors, four colours: `:hover`, an inline style set by the
+# page's own script on a click, a `keydown` listener with no field focused, and a scroll whose assertion needs the
+# DOCUMENT to have moved. No compositor is involved — the engine is independent of the window server — so this runs
+# anywhere WebKit does, and it SKIPS (77) when there is none.
+add_executable(webengine_input webengine_input.c)
+target_link_libraries(webengine_input PRIVATE WebView)
+
+add_test(NAME webengine-input COMMAND webengine_input)
+set_tests_properties(webengine-input PROPERTIES SKIP_RETURN_CODE 77
+  ENVIRONMENT "${_agora_webview_test_env}")
+
 add_test(NAME webengine-page
   COMMAND "${CMAKE_CURRENT_SOURCE_DIR}/run-webengine.sh"
           "$<TARGET_FILE:webengine_probe>" "${AGORA_WINDOW_SERVER_BINARY}")

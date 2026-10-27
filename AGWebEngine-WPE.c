@@ -43,6 +43,12 @@
 
 #include "AGWebEngine.h"
 
+/* **THE APPKIT'S MODIFIER BITS, NOT A SECOND SET OF NAMES.** `AGWebEngine.h` documents its mask as the AppKit's, so the
+ * mapping from those to WPE's needs both vocabularies in one place — and this file is where they meet. The two number
+ * their bits DIFFERENTLY (the AppKit shift is 1, WPE's is 2), which is exactly the sort of thing a seam must absorb
+ * rather than pass on. */
+#include <AppKit/platform/AGWindowServer.h>
+
 #include <wpe/wpe.h>
 #include <wpe/fdo.h>
 #include <wpe/unstable/fdo-shm.h>
@@ -179,6 +185,122 @@ static const struct wpe_view_backend_exportable_fdo_client ag_web_client = {
 	NULL,
 	NULL,
 };
+
+/* ----------------------------------------------------------------------------------------------------------------
+ * input
+ * ---------------------------------------------------------------------------------------------------------------- */
+
+static uint32_t ag_web_modifiers(uint32_t modifiers)
+{
+	uint32_t wpe = 0;
+
+	if (modifiers & AGModifierShift) {
+		wpe |= wpe_input_keyboard_modifier_shift;
+	}
+	if (modifiers & AGModifierControl) {
+		wpe |= wpe_input_keyboard_modifier_control;
+	}
+	if (modifiers & AGModifierAlt) {
+		wpe |= wpe_input_keyboard_modifier_alt;
+	}
+	if (modifiers & AGModifierSuper) {
+		wpe |= wpe_input_keyboard_modifier_meta;
+	}
+	return wpe;
+}
+
+void AGWebEnginePointerMotion(AGWebEngine *engine, int x, int y, uint32_t modifiers, uint32_t time_ms)
+{
+	struct wpe_input_pointer_event event;
+
+	if (engine == NULL || engine->backend == NULL) {
+		return;
+	}
+	memset(&event, 0, sizeof event);
+	event.type = wpe_input_pointer_event_type_motion;
+	event.time = time_ms;
+	event.x = x;
+	event.y = y;
+	event.modifiers = ag_web_modifiers(modifiers);
+	wpe_view_backend_dispatch_pointer_event(engine->backend, &event);
+}
+
+void AGWebEnginePointerButton(AGWebEngine *engine, int x, int y, uint32_t button, int pressed, uint32_t modifiers,
+			      uint32_t time_ms)
+{
+	struct wpe_input_pointer_event event;
+
+	if (engine == NULL || engine->backend == NULL) {
+		return;
+	}
+	memset(&event, 0, sizeof event);
+	/* **A BUTTON EVENT CARRIES THE POSITION TOO, AND IT IS NOT DECORATION.** WebKit's hit test for a click uses this
+	 * pair; a button event with stale or zero coordinates clicks whatever is at the top left, which is exactly how a
+	 * "clicking does nothing" bug looks from the outside. */
+	event.type = wpe_input_pointer_event_type_button;
+	event.time = time_ms;
+	event.x = x;
+	event.y = y;
+	/* **WPE COUNTS ITS BUTTONS FROM ONE AND THE APPKIT COUNTS IN EVDEV CODES, WHICH IS A MEASUREMENT AND NOT A GUESS.**
+	 * `wpe_input_pointer_event.button` is 1 left, 2 middle, 3 right — so passing `0x110` (BTN_LEFT) through, which is
+	 * what every other door in this seam takes, delivers a click NOBODY HEARS. MEASURED on a page whose listeners paint
+	 * the element: `0x110` produced neither a `mousedown` nor a `click`, while `1` produced both. The AppKit's codes are
+	 * translated here so a caller keeps the vocabulary it has everywhere else. */
+	switch (button) {
+	case 0x110u:			/* BTN_LEFT */
+		event.button = 1;
+		break;
+	case 0x111u:			/* BTN_MIDDLE */
+		event.button = 2;
+		break;
+	case 0x112u:			/* BTN_RIGHT */
+		event.button = 3;
+		break;
+	case 0x113u:			/* BTN_SIDE — the first thumb button, which WebKit calls "back" */
+		event.button = 8;
+		break;
+	case 0x114u:			/* BTN_EXTRA — the second, "forward" */
+		event.button = 9;
+		break;
+	default:
+		/* Anything else is passed through: the seam does not pretend to know a device it has never seen, and a
+		 * caller with an exotic button can still reach the page. */
+		event.button = button;
+		break;
+	}
+	event.state = pressed ? 1 : 0;
+	event.modifiers = ag_web_modifiers(modifiers);
+	wpe_view_backend_dispatch_pointer_event(engine->backend, &event);
+}
+
+/* **THERE IS NO SCROLL DOOR HERE, AND THIS IS WHY.** The wheel was implemented, tested and removed rather than shipped
+ * unproven. MEASURED on WPE WebKit 2.48 with this shm host, against a 1400-point document and against a `div` with
+ * `overflow:auto`, with the pointer inside and the page focused: `wpe_view_backend_dispatch_axis_event` in BOTH wire
+ * forms (`wpe_input_axis_event` and the 2-D `wpe_input_axis_2d_event` with `motion_smooth | mask_2d`), at axes 0, 1,
+ * `REL_WHEEL` 8 and `REL_HWHEEL` 6, at magnitudes from 15 to 75000, in both directions — not one combination moved a
+ * pixel. Keys, pointer motion and buttons all reach the page through the same input client, so this is specific to the
+ * axis path and not to the host's loop.
+ *
+ * The next thing to try is an EGL-export host: WebKit's asynchronous scrolling lives in the compositor, and the shm
+ * export may simply not have the renderer's scroll path behind it. That is an experiment with a number attached, and it
+ * belongs in this file when it has been made rather than as a door that does nothing. */
+
+void AGWebEngineKey(AGWebEngine *engine, uint32_t keysym, uint32_t hardware_keycode, uint32_t modifiers, int pressed,
+		    uint32_t time_ms)
+{
+	struct wpe_input_keyboard_event event;
+
+	if (engine == NULL || engine->backend == NULL) {
+		return;
+	}
+	memset(&event, 0, sizeof event);
+	event.time = time_ms;
+	event.key_code = keysym;
+	event.hardware_key_code = hardware_keycode;
+	event.pressed = pressed != 0;
+	event.modifiers = ag_web_modifiers(modifiers);
+	wpe_view_backend_dispatch_keyboard_event(engine->backend, &event);
+}
 
 /* ----------------------------------------------------------------------------------------------------------------
  * WebKit's signals, in the seam's vocabulary

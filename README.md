@@ -17,6 +17,7 @@ AGWebEngineIterate                                     → pump it, once a turn,
 AGWebEngineDraw(engine, dst, stride, w, h)             → the newest frame, in the window's own format
 AGWebEngineSetSize                                     → a viewport change, which the page relayouts for
 AGWebEngineURI / Title / Progress                      → what is loaded
+AGWebEnginePointerMotion / PointerButton / Key         → input, in the engine's device pixels
 AGWebEngineDestroy                                     → and see "Teardown", below
 ```
 
@@ -57,12 +58,33 @@ Written down in `AGWebEngine-WPE.c` in the order it has to happen. The three fin
 The web process is **sandboxed** (bubblewrap) and needs no environment variable here; the `WEBKIT_DISABLE_SANDBOX…`
 escape hatch is deliberately unused by this component and its tests.
 
+## Input
+
+Pointer motion, buttons and keys are implemented and each is asserted by a colour the page paints. Two behaviours were
+measured rather than assumed, and both are in `AGWebEngine-WPE.c` where they bite:
+
+- **WPE counts buttons from one.** `wpe_input_pointer_event.button` is 1 left, 2 middle, 3 right, so the AppKit's evdev
+  code (`0x110`) passed straight through produces a click nobody hears — measured: `0x110` produced neither `mousedown`
+  nor `click`, `1` produced both. The seam translates, because every other door in it speaks evdev.
+- **The first click a page ever receives is taken by the focus.** Measured: the first press/release pair produced a
+  `mousemove` and a `mousedown`, the second produced the `click`. A view in an untouched window therefore sends one click
+  to take the focus, exactly as a person does.
+
+**There is no wheel door, deliberately.** It was implemented and removed: `wpe_view_backend_dispatch_axis_event` in both
+of WPE's wire forms (the 1-D event and the 2-D `motion_smooth | mask_2d`), on axes 0, 1, `REL_WHEEL` 8 and `REL_HWHEEL`
+6, at magnitudes from 15 to 75 000, both directions, against a 1400-point document and against a `div` with
+`overflow:auto`, with the pointer inside and the page focused — **no combination moved a pixel**. Keys, motion and
+buttons arrive through the same input client, so the gap is specific to the axis path. The next experiment is an
+EGL-export host, where WebKit's asynchronous scrolling lives; the matrix is recorded in `AGWebEngine-WPE.c` so nobody
+repeats it.
+
 ## Tests
 
 | test | what it asks | needs |
 |---|---|---|
 | `webengine-page` | a real page — red strip above, blue body below — reaches the glass: the **composited screenshot** is asserted, along with all three load stages, the title, and two drawn frames (the first is the blank page) | `window-server` built (else SKIP 77) |
 | `webengine-teardown` | two engines can be made and dropped in one process — the lifetime a real application has on `-terminate:` | nothing |
+| `webengine-input` | the page hears the pointer (`:hover`), the button (an inline style set by the page's own script) and the keys (a `keydown` listener with no field focused) — each asserted as a colour in the engine's own frame | nothing |
 
 ```sh
 /usr/bin/clang-19 cmake -S . -B build -DCMAKE_C_COMPILER=/usr/bin/clang-19 \
@@ -76,14 +98,13 @@ by name.
 ## What is not here yet, in the order it is worth doing
 
 1. **A `WKWebView`-shaped class** (`NSView` in this component, drawing `AGWebEngineDraw`'s pixels through a `CGImage`,
-   driven by the AppKit's run loop calling `AGWebEngineIterate`). The drawing half is the small half; the run-loop
-   integration is the interesting one.
-2. **Input.** `wpe_view_backend_dispatch_keyboard_event` / `…_pointer_*` exist and are the whole mechanism; a `WebView`
-   without them is a picture, not a view, and nothing in this component pretends otherwise.
+   driven by the AppKit's run loop calling `AGWebEngineIterate`, forwarding `AGEvent`s through the input doors scaled by
+   the buffer scale). The drawing half is the small half; the run-loop integration is the interesting one.
+2. **The wheel**, which needs the EGL-export host experiment described above before it can have a door.
 3. **Resize under load** and the scale factor (`wpe_view_backend_dispatch_set_device_scale_factor`), so a fractional
    Agora output renders pages at its own device pixels.
 4. **The EGL export path**, for a caller that composites on the GPU: the same seam, `AGGLTextureFromImage` instead of a
-   memcpy.
+   memcpy — and the place the wheel is most likely to start working.
 
 ## Licence
 
