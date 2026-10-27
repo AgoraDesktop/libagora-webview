@@ -187,6 +187,8 @@ int main(void)
 		"  #marker { height:200px; background:#00ffff; }"
 		"</style></head><body>"
 		"<div id=strip></div><div id=hover></div>"
+		"<div id=linkband style='position:fixed; left:0; top:0; width:80px; height:80px; font:14px sans-serif; "
+		"background:#f0f0f0'><a href='#nowhere' style='display:block;height:80px'>&nbsp;</a></div>"
 		"<div id=prose style='padding:4px 0; font:14px sans-serif; color:#ffffff; background:#0000c0'>"
 		"Selection should cover this sentence when the pointer is dragged across it.</div>"
 		"<div id=spacer></div><div id=marker></div>"
@@ -510,6 +512,68 @@ int main(void)
 			}
 			printf("appkit_webview: after a lost release, a click leaves %d selected\n", cleared2);
 			check(cleared2 == 0, "a click clears the selection even when a drag's release was lost");
+		}
+	}
+
+	/* 2e. **THE POINTER OVER A LINK IS A HAND, AND THE VIEW IS WHAT SAYS SO.** The page's link band is fixed in the view's
+	 * top-left corner and the prose sits at view y = H-88 (the line the drag test uses), so two moves must produce two
+	 * different cursors. The assertion is the view's own `-ag_cursorName` rather than a window's resolved pointer: a cursor
+	 * RECT is the AppKit's own tested machinery and this test has no window, so what is new here is the mapping and the
+	 * polling.
+	 *
+	 * **AND THE WAIT IS MEASURED, NOT GUESSED.** MEASURED with a fixed 800 ms sleep, the two readings came back SWAPPED —
+	 * each one still describing the previous move — so the probe polls until the name changes (bounded at three seconds)
+	 * and prints how long that took, which is the number a future reader needs. */
+	{
+		NSString *over_link = nil;
+		NSString *over_text = nil;
+		double waited_link = -1.0;
+		double waited_text = -1.0;
+		int tries;
+
+		[view mouseMoved:[NSEvent mouseEventWithType:NSMouseMoved
+					  location:NSMakePoint(40.0, (CGFloat)(H - 40))
+				     modifierFlags:0
+					 timestamp:4.2
+				      windowNumber:0
+					   context:nil
+				       eventNumber:70
+					clickCount:0
+					  pressure:0.0f]];
+		for (tries = 0; tries < 150; tries++) {
+			pump(0.02);
+			if ([[view ag_cursorName] isEqualToString:@"pointer"]) {
+				break;
+			}
+		}
+		waited_link = (double)tries * 20.0;
+		over_link = [[view ag_cursorName] copy];
+
+		[view mouseMoved:[NSEvent mouseEventWithType:NSMouseMoved
+					  location:NSMakePoint(60.0, (CGFloat)(H - 88))
+				     modifierFlags:0
+					 timestamp:4.3
+				      windowNumber:0
+					   context:nil
+				       eventNumber:71
+					clickCount:0
+					  pressure:0.0f]];
+		for (tries = 0; tries < 150; tries++) {
+			pump(0.02);
+			if ([[view ag_cursorName] isEqualToString:@"text"]) {
+				break;
+			}
+		}
+		waited_text = (double)tries * 20.0;
+		over_text = [[view ag_cursorName] copy];
+
+		printf("appkit_webview: the cursor over the link is \"%s\" after %.0f ms, over the prose \"%s\" after %.0f ms\n",
+		       [over_link UTF8String] ?: "(nil)", waited_link, [over_text UTF8String] ?: "(nil)", waited_text);
+		if (![over_link isEqualToString:@"invalid"]) {
+			check([over_link isEqualToString:@"pointer"], "the pointer over a link is a hand");
+			check([over_text isEqualToString:@"text"], "the pointer over prose is an I-beam");
+		} else {
+			printf("appkit_webview: this WebKit does not report the page's cursor; skipping the two cursor checks\n");
 		}
 	}
 

@@ -396,6 +396,42 @@ make the field first responder, deliver each character as a real `NSEvent` throu
 "the typed address loaded" and "back went to the first page" are claims about WebKit, not about the app's own log line;
 the composed frame then has to show the first page's colour on the glass.
 
+## The pointer over a page: the page's decision, carried out by the view
+
+`WKWebView` now changes the pointer the way a browser does — a hand over a link, an I-beam over text, a crosshair where a
+page asked for one, a "no" sign where it refuses a drop, and nothing where a page draws its own pointer. It is part of the
+class, not the demo: `AGWebEngineCallbacks.cursor_changed` carries the value, `-resetCursorRects` hands it to the AppKit as
+a cursor rect, and `-ag_cursorName` says which one, for logs and tests.
+
+Three things had to happen, and two of them were wrong the first time.
+
+**The cursor came from the port.** `WPEWebView.h`'s `setCursor` was an empty virtual, so WPE's legacy view discarded the
+cursor the page computed. The fork (`~/Development/wpewebkit`) now reports it: `WebKitCursorType`, a getter, and a
+`cursor-changed` signal. Hit testing could not have done this — a `pointer` on a plain `<div>`, `not-allowed` on a control
+and `text` in a `contenteditable` are indistinguishable there.
+
+**Polling does not work, and the measurements say why.** The first implementation asked for the value after each move. On a
+page of five bands it reported the *previous* band, and three seconds of pumping changed nothing; a repeated motion
+sometimes helped and sometimes did not; two motions in the same turn never did, and repeating them every 64 ms while a
+"pending" flag was set still raced. A probe using `ag_now_ms()` did nothing at all, because its timestamp jumped a million
+milliseconds past the event it followed. The signal removed the whole question: the view installs the cursor in the turn
+WebKit announces it, **0 ms** in the offscreen test.
+
+**And the view must not release a cursor.** `+[NSCursor arrowCursor]` and its siblings return one shared instance per class,
+held by the AppKit; the first version retained the new one and released the old, which deallocated the singleton and left the
+class with a dangling pointer — the cursor then stopped changing at all.
+
+```
+appkit_webview: the cursor over the link is "pointer" after 0 ms, over the prose is "text" after 0 ms
+  ok     the pointer over a link is a hand
+  ok     the pointer over prose is an I-beam
+
+webengine-cursor: a link -> 3, text -> 4, crosshair -> 2, not-allowed -> 18, none -> 19
+```
+
+`webengine-cursor` SKIPS on a WebKit without the fork's API, which is the honest answer there: the component still builds,
+runs and keeps its own pointer.
+
 ## The first load took 6.5 seconds, and it was a vblank wait
 
 Building WPE WebKit 2.54.2 locally made every page take seven seconds before anything appeared. The number came from the

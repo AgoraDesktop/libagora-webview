@@ -64,10 +64,38 @@ typedef enum {
  *
  * The first frame, a resize and a scroll are the whole frame, and that is honest rather than pessimistic: those really
  * did change everything. */
+typedef enum {
+	AGWebCursorInvalid = 0,		/* nothing reported yet, or this engine cannot report */
+	AGWebCursorArrow,
+	AGWebCursorCrosshair,
+	AGWebCursorHand,		/* links, buttons, anything `cursor: pointer` */
+	AGWebCursorIBeam,		/* selectable text and editable fields */
+	AGWebCursorBusy,
+	AGWebCursorHelp,
+	AGWebCursorResizeEast,
+	AGWebCursorResizeNorth,
+	AGWebCursorResizeNorthEast,
+	AGWebCursorResizeNorthWest,
+	AGWebCursorResizeSouth,
+	AGWebCursorResizeSouthEast,
+	AGWebCursorResizeSouthWest,
+	AGWebCursorResizeWest,
+	AGWebCursorResizeColumn,
+	AGWebCursorResizeRow,
+	AGWebCursorMove,
+	AGWebCursorNotAllowed,
+	AGWebCursorNone,		/* `cursor: none`: the page is drawing its own pointer */
+	AGWebCursorOther,		/* a custom image, or a type this enum does not name */
+} AGWebCursor;
+
 typedef struct AGWebEngineCallbacks {
 	void (*load_changed)(void *context, AGWebEngine *engine, AGWebLoadStage stage);
 	void (*title_changed)(void *context, AGWebEngine *engine, const char *title);
 	void (*damaged)(void *context, AGWebEngine *engine, int x, int y, int width, int height);
+	/* **THE POINTER'S APPEARANCE, ANNOUNCED RATHER THAN POLLED.** WebKit decides what the cursor should be and says so on
+	 * a change; this is that moment, handed to the embedder, which is the only party that can move a real pointer. Null on
+	 * an engine that cannot report it (the distro's WebKit), in which case nothing here happens. */
+	void (*cursor_changed)(void *context, AGWebEngine *engine, AGWebCursor cursor);
 } AGWebEngineCallbacks;
 
 /* **HOW THE ENGINE'S FRAMES REACH THIS PROCESS.** Two of WPE's export paths produce the same picture and cost different
@@ -183,6 +211,18 @@ double AGWebEngineProgress(AGWebEngine *engine);
  * was measured as the risk of the emulation before links worked at all, and it is real as soon as they do. The view turns
  * this on when its drag starts and off when the button is released. */
 void AGWebEngineSetSuppressNavigation(AGWebEngine *engine, int suppressed);
+
+/* **WHAT THE POINTER SHOULD LOOK LIKE, WHICH IS THE PAGE'S DECISION AND NOT A HIT TEST.** A page says `cursor: pointer`
+ * on a `<div>`, `not-allowed` on a control, `text` in a `contenteditable`, `none` on a video it is drawing itself — and all
+ * of those are indistinguishable from an ordinary element by hit testing alone. WebKit computes the cursor; this seam
+ * carries it out to the embedder, which is the only party that can change a real pointer.
+ *
+ * `AGWebEngineCursorSupported` is false against a WebKit without the reporting API (the distro's 2.48, for instance), and
+ * then `AGWebEngineCursor` answers `AGWebCursorInvalid` for ever: a caller keeps its default pointer rather than guessing.
+ * `webengine-cursor` is the test, and it SKIPS on such a build rather than failing. */
+
+int AGWebEngineCursorSupported(AGWebEngine *engine);
+AGWebCursor AGWebEngineCursor(AGWebEngine *engine);
 
 int AGWebEngineCanGoBack(AGWebEngine *engine);
 void AGWebEngineGoBack(AGWebEngine *engine);

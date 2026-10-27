@@ -30,11 +30,13 @@
 #ifndef AG_WK_WEB_VIEW_H
 #define AG_WK_WEB_VIEW_H
 
+#import <AgoraWebView/AGWebEngine.h>
 #import <AppKit/NSView.h>
 #import <AppKit/NSEvent.h>
 
 NS_ASSUME_NONNULL_BEGIN
 
+@class NSCursor;
 @class WKWebView;
 @class NSURL;
 @class NSURLRequest;
@@ -86,6 +88,8 @@ NS_ASSUME_NONNULL_BEGIN
 	 * word and then a paragraph. MEASURED: presses 1-3 pixels apart selected 263 characters where the same drag with six
 	 * points between presses selected 30. */
 	double _last_drag_extend_ms;
+	NSCursor *_cursor;		/* the pointer over the page, as the page asked for it */
+	AGWebCursor _cursor_kind;
 	CGFloat _drag_last_x;
 	CGFloat _drag_last_y;
 	BOOL _drag_extending;
@@ -128,6 +132,14 @@ NS_ASSUME_NONNULL_BEGIN
 /* **HISTORY, WHICH IS WHAT A BACK BUTTON IS MADE OF.** The engine keeps WebKit's own list; these four are the whole of
  * what a browser chrome needs, and "can" is asked separately from doing it so a button can be greyed out rather than
  * pressed into a no-op. */
+/* **THE POINTER OVER THE PAGE IS THE PAGE'S DECISION**, carried out by the view as a cursor rect: `ag_cursor` is what the
+ * engine last reported (nil when the engine cannot report, or before the page has set one), and `-resetCursorRects` hands
+ * it to the AppKit, which resolves it against the pointer as it moves. A caller that wants to know why its arrow changed
+ * can read `-ag_cursorName` — the CSS-shaped name, for logs and tests. */
+- (void)ag_refreshCursor;
+- (void)ag_takeCursor:(AGWebCursor)cursor;
+- (nullable NSString *)ag_cursorName;
+
 - (BOOL)canGoBack;
 - (void)goBack;
 - (BOOL)canGoForward;

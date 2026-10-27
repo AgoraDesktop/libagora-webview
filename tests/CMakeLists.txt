@@ -36,6 +36,16 @@ set(AGORA_WINDOW_SERVER_BINARY "${CMAKE_CURRENT_SOURCE_DIR}/../../window-server/
 # **AND HOW LONG THE FIRST LOAD TAKES, WHICH ONCE TOOK 6.5 SECONDS.** The stall was a `drmWaitVBlank()` on a display this
 # process does not own; the engine forces the timer-based vblank monitor and this asserts the load starts inside 1.5 s. Set
 # `WEBKIT_FORCE_VBLANK_TIMER=0` to watch it fail.
+# **THE POINTER OVER A PAGE IS THE PAGE'S DECISION.** Five bands in one page — link, text, crosshair, not-allowed, none —
+# and the probe walks the pointer down them. SKIPS on a WebKit without the cursor door (the distro's), because the
+# component still works there; it just keeps its own pointer.
+add_executable(webengine_cursor webengine_cursor.c)
+target_link_libraries(webengine_cursor PRIVATE WebView)
+
+add_test(NAME webengine-cursor COMMAND webengine_cursor)
+set_tests_properties(webengine-cursor PROPERTIES SKIP_RETURN_CODE 77
+  ENVIRONMENT "${_agora_webview_test_env}")
+
 add_executable(webengine_startup webengine_startup.c)
 target_link_libraries(webengine_startup PRIVATE WebView)
 

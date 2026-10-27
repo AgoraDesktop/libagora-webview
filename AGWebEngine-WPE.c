@@ -43,6 +43,8 @@
 
 #include "AGWebEngine.h"
 
+#include <dlfcn.h>
+
 /* **THE APPKIT'S MODIFIER BITS, NOT A SECOND SET OF NAMES.** `AGWebEngine.h` documents its mask as the AppKit's, so the
  * mapping from those to WPE's needs both vocabularies in one place — and this file is where they meet. The two number
  * their bits DIFFERENTLY (the AppKit shift is 1, WPE's is 2), which is exactly the sort of thing a seam must absorb
@@ -126,6 +128,10 @@ struct AGWebEngine {
 	/* **SET WHILE A SELECTION DRAG IS RUNNING**, so the policy handler can refuse a link the drag happens to cross — see
 	 * `AGWebEngineSetSuppressNavigation`. Zero means ordinary navigation. */
 	int suppress_navigation;
+
+	/* The cursor the page last asked for, kept so `AGWebEngineCursor` answers instantly and agrees with the signal. */
+	AGWebCursor cursor;
+	int cursor_supported;
 
 	/* **THE SIZE IS IN POINTS AND THE FACTOR IS WHAT MAKES PIXELS.** See `AGWebEngineSetDeviceScaleFactor`: WebKit lays
 	 * the page out for these, and paints `points x device_scale` device pixels. */
@@ -687,6 +693,46 @@ void AGWebEngineSetSuppressNavigation(AGWebEngine *engine, int suppressed)
 	engine->suppress_navigation = suppressed ? 1 : 0;
 }
 
+/* **THE CURSOR, ANNOUNCED.** The signal carries the fork's `WebKitCursorType`; the mapping to this seam's enum is the same
+ * one the getter uses, so both doors agree by construction. `ag_web_cursor_from_platform` is that mapping, in one place. */
+static AGWebCursor ag_web_cursor_from_platform(int type)
+{
+	switch (type) {
+	case 1: return AGWebCursorArrow;
+	case 2: return AGWebCursorCrosshair;
+	case 3: return AGWebCursorHand;
+	case 4: return AGWebCursorIBeam;
+	case 5: return AGWebCursorBusy;
+	case 6: return AGWebCursorHelp;
+	case 7: return AGWebCursorResizeEast;
+	case 8: return AGWebCursorResizeNorth;
+	case 9: return AGWebCursorResizeNorthEast;
+	case 10: return AGWebCursorResizeNorthWest;
+	case 11: return AGWebCursorResizeSouth;
+	case 12: return AGWebCursorResizeSouthEast;
+	case 13: return AGWebCursorResizeSouthWest;
+	case 14: return AGWebCursorResizeWest;
+	case 15: return AGWebCursorResizeColumn;
+	case 16: return AGWebCursorResizeRow;
+	case 17: return AGWebCursorMove;
+	case 18: return AGWebCursorNotAllowed;
+	case 19: return AGWebCursorNone;
+	case 0: return AGWebCursorInvalid;
+	default: return AGWebCursorOther;
+	}
+}
+
+static void ag_web_cursor_changed(WebKitWebView *view, guint cursor, gpointer data)
+{
+	AGWebEngine *engine = data;
+
+	(void)view;
+	engine->cursor = ag_web_cursor_from_platform((int)cursor);
+	if (engine->callbacks.cursor_changed != NULL) {
+		engine->callbacks.cursor_changed(engine->context, engine, engine->cursor);
+	}
+}
+
 static void ag_web_title_changed(GObject *object, GParamSpec *spec, gpointer data)
 {
 	AGWebEngine *engine = data;
@@ -834,6 +880,13 @@ AGWebEngine *AGWebEngineCreateWithOptions(int width, int height, AGWebExport exp
 	g_signal_connect(engine->view, "load-changed", G_CALLBACK(ag_web_load_changed), engine);
 	g_signal_connect(engine->view, "notify::title", G_CALLBACK(ag_web_title_changed), engine);
 	g_signal_connect(engine->view, "decide-policy", G_CALLBACK(ag_web_decide_policy), engine);
+	/* **THE SIGNAL IS LOOKED UP FIRST, BECAUSE THE DISTRO'S WEBKIT DOES NOT HAVE IT.** Connecting to a signal that does not
+	 * exist is a GLib warning per engine, which would be noise on every machine without the fork; the lookup is one call
+	 * and its absence is the same information `AGWebEngineCursorSupported` reports. */
+	if (g_signal_lookup("cursor-changed", G_OBJECT_TYPE(engine->view)) != 0) {
+		g_signal_connect(engine->view, "cursor-changed", G_CALLBACK(ag_web_cursor_changed), engine);
+		engine->cursor_supported = 1;
+	}
 	/* **THE BACKGROUND IS LEFT ALONE, AND THAT IS THE MEASURED CHOICE.** `webkit_web_view_set_background_color` refuses
 	 * NULL with a `g_return_if_fail` CRITICAL, and its default is already opaque white — which is what a page with no
 	 * background is, and what this seam's caller draws over. Setting it needs a `WebKitColor` built for no gain. */
@@ -1001,6 +1054,46 @@ const char *AGWebEngineURI(AGWebEngine *engine)
 		return NULL;
 	}
 	return webkit_web_view_get_uri(engine->view);
+}
+
+/* **THE CURSOR IS ASKED FOR BY NAME, NOT LINKED AGAINST.** `webkit_web_view_get_cursor_type` exists only in a WebKit built
+ * from the Agora fork (it is not upstream API — see that fork's `agora/README.md`), and this component must keep building
+ * and running against the distro's library, where it is absent. `dlsym` is the honest answer: one lookup, cached, and a
+ * capability flag a caller can read instead of a link error at load time.
+ *
+ * The integer values below are that API's `WebKitCursorType`, in its declared order, and they are written out rather than
+ * cast for exactly one reason: if the fork ever reorders them, this mapping says so in the code review, and
+ * `webengine-cursor` fails on the first semantic mismatch (a hand over a link) instead of quietly showing the wrong arrow. */
+static int (*ag_web_cursor_type_fn(void))(void *)
+{
+	static int resolved;
+	static int (*fn)(void *);
+
+	if (!resolved) {
+		fn = (int (*)(void *))dlsym(RTLD_DEFAULT, "webkit_web_view_get_cursor_type");
+		resolved = 1;
+	}
+	return fn;
+}
+
+int AGWebEngineCursorSupported(AGWebEngine *engine)
+{
+	if (engine == NULL) {
+		return 0;
+	}
+	return (engine->cursor_supported || (engine->view != NULL && ag_web_cursor_type_fn() != NULL)) ? 1 : 0;
+}
+
+AGWebCursor AGWebEngineCursor(AGWebEngine *engine)
+{
+	int (*fn)(void *) = ag_web_cursor_type_fn();
+	int type;
+
+	if (engine == NULL || engine->view == NULL || fn == NULL) {
+		return AGWebCursorInvalid;
+	}
+	type = fn(engine->view);
+	return ag_web_cursor_from_platform(type);
 }
 
 int AGWebEngineCanGoBack(AGWebEngine *engine)

@@ -39,6 +39,7 @@
 #import <AppKit/NSGraphicsContext.h>
 #import <AppKit/NSColor.h>
 #import <AppKit/NSWindow.h>
+#import <AppKit/NSCursor.h>
 #import <AppKit/NSEvent.h>
 #import <AppKit/platform/AGKeyboard.h>
 #import <AppKit/platform/AGWindowServer.h>
@@ -100,6 +101,8 @@ static double ag_now_ms(void)
 /* **THE ENGINE'S CALLBACKS, WITH THE VIEW AS CONTEXT.** They arrive from `AGWebEngineIterate` on the run loop's own
  * thread, which is the only thread this class knows about; the ObjC half does nothing but set flags and tell a delegate. */
 static void ag_view_load_changed(void *context, AGWebEngine *engine, AGWebLoadStage stage);
+static void ag_view_cursor_changed(void *context, AGWebEngine *engine, AGWebCursor cursor);
+
 static void ag_view_damaged(void *context, AGWebEngine *engine, int x, int y, int width, int height);
 static void ag_view_title_changed(void *context, AGWebEngine *engine, const char *title);
 
@@ -109,6 +112,16 @@ static void ag_view_load_changed(void *context, AGWebEngine *engine, AGWebLoadSt
 
 	(void)engine;
 	[view ag_engineLoadStage:(int)stage];
+}
+
+static void ag_view_cursor_changed(void *context, AGWebEngine *engine, AGWebCursor cursor);
+
+static void ag_view_cursor_changed(void *context, AGWebEngine *engine, AGWebCursor cursor)
+{
+	WKWebView *view = context;
+
+	(void)engine;
+	[view ag_takeCursor:cursor];
 }
 
 static void ag_view_damaged(void *context, AGWebEngine *engine, int x, int y, int width, int height)
@@ -201,6 +214,7 @@ static void ag_view_title_changed(void *context, AGWebEngine *engine, const char
 		callbacks.load_changed = ag_view_load_changed;
 		callbacks.title_changed = ag_view_title_changed;
 		callbacks.damaged = ag_view_damaged;
+	callbacks.cursor_changed = ag_view_cursor_changed;
 		_engine = AGWebEngineCreate(width, height, &callbacks, self);
 			/* The scale and the size are pushed by `-ag_syncGeometry`, which asks the window rather than trusting whatever
 		 * `_scale` had been set to when this view was created. */
@@ -452,6 +466,112 @@ static void ag_view_title_changed(void *context, AGWebEngine *engine, const char
 	return (uri != NULL) ? [NSURL URLWithString:[NSString stringWithUTF8String:uri]] : nil;
 }
 
+/* **THE ENGINE'S CURSOR, AS AN `NSCursor`, WITH THE NAMES A PERSON KNOWS.** The mapping is one-to-one where this tier has a
+ * cursor for the type and falls back to the arrow where it does not: a resize direction Apple has no name for is better as
+ * an arrow than as a hand. `AGWebCursorNone` — the page draws its own pointer — becomes the arrow too, because this tier has
+ * no hidden cursor and an arrow is the honest "nothing special" rather than a pointer that vanishes with no explanation. */
+static NSCursor *ag_cursor_for(AGWebCursor cursor)
+{
+	switch (cursor) {
+	case AGWebCursorCrosshair:	return [NSCursor crosshairCursor];
+	case AGWebCursorHand:		return [NSCursor pointingHandCursor];
+	case AGWebCursorIBeam:		return [NSCursor IBeamCursor];
+	case AGWebCursorMove:		return [NSCursor openHandCursor];
+	case AGWebCursorNotAllowed:	return [NSCursor operationNotAllowedCursor];
+	case AGWebCursorResizeEast:
+	case AGWebCursorResizeWest:
+	case AGWebCursorResizeColumn:	return [NSCursor resizeLeftRightCursor];
+	case AGWebCursorResizeNorth:
+	case AGWebCursorResizeSouth:
+	case AGWebCursorResizeRow:	return [NSCursor resizeUpDownCursor];
+	case AGWebCursorArrow:
+	case AGWebCursorBusy:
+	case AGWebCursorHelp:
+	case AGWebCursorResizeNorthEast:
+	case AGWebCursorResizeNorthWest:
+	case AGWebCursorResizeSouthEast:
+	case AGWebCursorResizeSouthWest:
+	case AGWebCursorNone:
+	case AGWebCursorOther:
+	case AGWebCursorInvalid:
+	default:			return [NSCursor arrowCursor];
+	}
+}
+
+static NSString *ag_cursor_name_for(AGWebCursor cursor)
+{
+	switch (cursor) {
+	case AGWebCursorArrow:		return @"default";
+	case AGWebCursorCrosshair:	return @"crosshair";
+	case AGWebCursorHand:		return @"pointer";
+	case AGWebCursorIBeam:		return @"text";
+	case AGWebCursorBusy:		return @"wait";
+	case AGWebCursorHelp:		return @"help";
+	case AGWebCursorMove:		return @"move";
+	case AGWebCursorNotAllowed:	return @"not-allowed";
+	case AGWebCursorNone:		return @"none";
+	case AGWebCursorResizeEast:	return @"e-resize";
+	case AGWebCursorResizeNorth:	return @"n-resize";
+	case AGWebCursorResizeNorthEast: return @"ne-resize";
+	case AGWebCursorResizeNorthWest: return @"nw-resize";
+	case AGWebCursorResizeSouth:	return @"s-resize";
+	case AGWebCursorResizeSouthEast: return @"se-resize";
+	case AGWebCursorResizeSouthWest: return @"sw-resize";
+	case AGWebCursorResizeWest:	return @"w-resize";
+	case AGWebCursorResizeColumn:	return @"col-resize";
+	case AGWebCursorResizeRow:	return @"row-resize";
+	case AGWebCursorOther:		return @"other";
+	case AGWebCursorInvalid:
+	default:			return @"invalid";
+	}
+}
+
+/* **THE PAGE ANNOUNCED A CURSOR: INSTALL IT NOW.** This is the path a real browser takes — WebKit decides and says so, and
+ * the view moves the pointer in the same turn. `-ag_refreshCursor` remains as the door for an engine that only has the
+ * getter, and for the first paint before anything has been announced. */
+- (void)ag_takeCursor:(AGWebCursor)cursor
+{
+	NSCursor *next = ag_cursor_for(cursor);
+
+	if (next == _cursor && cursor == _cursor_kind) {
+		return;
+	}
+	if (getenv("WK_WEBVIEW_DIAG") != NULL) {
+		fprintf(stderr, "  DIAG cursor: %d -> %s\n", (int)cursor, [ag_cursor_name_for(cursor) UTF8String]);
+	}
+	_cursor_kind = cursor;
+	/* **THE CURSOR IS BORROWED, NOT OWNED.** Every `+[NSCursor arrowCursor]` and its siblings hands back ONE instance per
+	 * class, kept in a static slot by the AppKit (`+[NSCursor cg_sharedCursor:]`) and returned without an autorelease —
+	 * it is the class's reference, not the caller's. The first version of this method retained the new cursor and RELEASED
+	 * the old one, which deallocated the shared singleton and left the class holding a dangling pointer. Assign, never
+	 * release. */
+	_cursor = next;
+	/* **AND THE APPKIT IS TOLD THE RECTS ARE WRONG**, which is the only way it re-asks `-resetCursorRects:`. */
+	[[self window] invalidateCursorRectsForView:self];
+}
+
+- (void)ag_refreshCursor
+{
+	AGWebCursor cursor;
+
+	if (_engine == NULL) {
+		return;
+	}
+	cursor = AGWebEngineCursor((AGWebEngine *)_engine);
+	[self ag_takeCursor:cursor];
+}
+
+- (NSString *)ag_cursorName
+{
+	return ag_cursor_name_for(_cursor_kind);
+}
+
+- (void)resetCursorRects
+{
+	[super resetCursorRects];
+	[self addCursorRect:[self bounds] cursor:(_cursor != nil ? _cursor : [NSCursor arrowCursor])];
+}
+
 - (BOOL)canGoBack
 {
 	return (_engine != NULL && AGWebEngineCanGoBack((AGWebEngine *)_engine)) ? YES : NO;
@@ -574,6 +694,9 @@ static void ag_view_title_changed(void *context, AGWebEngine *engine, const char
 	if (_engine == NULL) {
 		return;
 	}
+	/* **THE PROBE: THE REMEMBERED POSITION, ONCE, IN A LATER TURN.** See `-mouseMoved:` — the cursor for a position is
+	 * reported on the motion after it, so the view replays the last one and then asks. */
+	/* Nothing to poll for: the cursor arrives through `ag_view_cursor_changed` when the page changes it. */
 	AGWebEngineFrameSize((AGWebEngine *)_engine, &width, &height);
 	if (width <= 0 || height <= 0) {
 		return;
@@ -897,8 +1020,23 @@ static BOOL ag_real_drag_enabled(void)
 		return;
 	}
 	point = [self ag_enginePointForEvent:event];
+	if (getenv("WK_WEBVIEW_DIAG") != NULL) {
+		fprintf(stderr, "  DIAG move: view (%.0f,%.0f) -> engine (%.0f,%.0f) scale %.3f\n",
+			[event locationInWindow].x, [event locationInWindow].y, point.x, point.y, (double)_scale);
+	}
 	AGWebEnginePointerMotion((AGWebEngine *)_engine, (int)(point.x + 0.5), (int)(point.y + 0.5),
 				 ag_view_modifiers([event modifierFlags]), [self ag_timeForEvent:event]);
+	/* **THE MOVE IS FOLLOWED BY A PROBE, AND THAT IS A MEASUREMENT.** MEASURED on a page of five bands — link, text,
+	 * crosshair, `not-allowed`, `cursor: none` — the page's cursor for a position arrives only on the NEXT motion event:
+	 * three seconds of pumping after one motion still reported the previous band, and the next motion (at the same point,
+	 * 400 ms later) delivered it. Two motions in the SAME turn do nothing, which is how this was pinned down: the web
+	 * process evaluates the pointer over the position it was told about before and reports that on the following event.
+	 * So the position is remembered and replayed once by the pump — one extra pointer event per move, carrying no layout
+	 * and no paint. */
+	/* **THE CURSOR ARRIVES BY ITSELF, ON A CHANGE.** The engine reports it through `cursor_changed`, WebKit announces it
+	 * when the page's answer changes, and the view installs it there — so nothing here has to poll for it. The one poll
+	 * below is for the first value: a page whose cursor changed before the view had a delegate gets it from the getter. */
+	[self ag_refreshCursor];
 }
 
 /* **THE WHEEL, WITH ITS SIGN THE RIGHT WAY ROUND.** `NSEvent`'s `deltaY` is positive when the person scrolls UP (content
