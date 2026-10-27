@@ -12,7 +12,8 @@
  *
  * **THE ORDER OF THE LOAD IS PART OF WHAT IS MEASURED.** WebKit exports a blank white frame before the page is
  * committed, so a probe that stopped at the first frame would photograph white and pass a check that only asked for
- * "some pixels". This one records the load stages it saw and requires a FINISHED load AND a frame drawn after it.
+ * "some pixels". This one records the load stages it saw, requires a FINISHED load, and then SAMPLES the engine's own
+ * frame for the page's two colours — red band above, blue body below.
  *
  * The engine's loop is pumped here, which is the whole of what an application has to do: `AGWebEngineIterate` and
  * `AGWindowServerDispatch` are both non-blocking, and one turn of each is one turn of the desktop.
@@ -28,6 +29,9 @@
 
 #define WINDOW_WIDTH 320
 #define WINDOW_HEIGHT 200
+
+#define PAGE_RED 0x00C00000u
+#define PAGE_BLUE 0x000000C0u
 #define WINDOW_TOP 32
 
 struct App {
@@ -95,6 +99,37 @@ static void on_event(void *context, const AGEvent *event)
 	(void)event;
 }
 
+/* **THE ENGINE'S OWN FRAME, ASKED FOR THE WAY A VIEW ASKS FOR IT.** `AGWebEngineDraw` is the same call `-drawRect:` makes,
+ * so a colour found here is a colour the window would show; the runner's screenshot then proves the last hop separately. */
+static int frame_has_colour(struct App *app, uint32_t rgb)
+{
+	uint32_t *pixels;
+	int width = 0;
+	int height = 0;
+	int found = 0;
+	size_t i;
+	size_t count;
+
+	AGWebEngineFrameSize(app->engine, &width, &height);
+	if (width <= 0 || height <= 0) {
+		return 0;
+	}
+	pixels = malloc((size_t)width * (size_t)height * 4u);
+	if (pixels == NULL) {
+		return 0;
+	}
+	AGWebEngineDraw(app->engine, pixels, width * 4, width, height);
+	count = (size_t)width * (size_t)height;
+	for (i = 0; i < count; i++) {
+		if ((pixels[i] & 0x00FFFFFFu) == rgb) {
+			found = 1;
+			break;
+		}
+	}
+	free(pixels);
+	return found;
+}
+
 int main(void)
 {
 	static const AGWebEngineCallbacks callbacks = {
@@ -144,7 +179,13 @@ int main(void)
 	verdict = 0;
 	while (AGWindowServerDispatchTimeout(app.server, 5) >= 0) {
 		AGWebEngineIterate(app.engine);
-		if (!verdict && app.finished && app.drawn >= 2) {
+		/* **THE VERDICT IS THE PICTURE, NOT A FRAME COUNT.** This used to require TWO frames, on the reasoning that the first
+	 * one is the blank page WebKit exports before the content commits. That was true of a SLOW start and false of a fast
+	 * one: MEASURED after the vblank stall was fixed (the page now commits in ~270 ms instead of 6.5 s), the first frame
+	 * the engine exports is already the finished page, nothing changes afterwards, so the damage callback fires once and a
+	 * two-frame rule fails a probe whose screenshot is perfect. What matters is what the frame CONTAINS, so the colours
+	 * are sampled instead — which is also a stronger claim than "a frame happened". */
+	if (!verdict && app.finished && frame_has_colour(&app, PAGE_RED) && frame_has_colour(&app, PAGE_BLUE)) {
 			verdict = 1;
 			printf("webengine: ok — the page was drawn\n");
 		}
@@ -160,9 +201,7 @@ int main(void)
 		return 1;
 	}
 	if (!verdict) {
-		/* **ONE FRAME IS THE BLANK PAGE.** WebKit exports white before the content is committed, so a probe that
-		 * drew once drew the wrong picture; see this file's header. */
-		fprintf(stderr, "webengine: the page never reached the second frame (%d drawn)\n", app.drawn);
+		fprintf(stderr, "webengine: the engine's frame never became the page (%d frame(s) drawn)\n", app.drawn);
 		return 1;
 	}
 	return 0;

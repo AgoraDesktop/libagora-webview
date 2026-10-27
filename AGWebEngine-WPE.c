@@ -715,6 +715,31 @@ AGWebEngine *AGWebEngineCreateWithExport(int width, int height, AGWebExport expo
 	return AGWebEngineCreateWithOptions(width, height, export, NULL, callbacks, context);
 }
 
+/* **THE FIRST LOAD COST 6.5 SECONDS, AND IT WAS A VBLANK WAIT ON A DISPLAY THIS PROCESS DOES NOT OWN.** MEASURED on this
+ * machine, nested on X11 and with WPE WebKit 2.54.2 built locally: `started` (the load's own first stage) arrived 6418 ms
+ * after `AGWebEngineLoadURI`, for an EMPTY page and for a `file://` one alike — so not network, not layout, not content.
+ * A `gdb` backtrace of the UI process while it waited named the place exactly:
+ *
+ *   WebPageProxy::loadRequest → launchProcess → finishAttachingToWebProcess → initializeWebPage →
+ *   creationParameters → DisplayLink::platformInitialize → DisplayVBlankMonitorDRM::create
+ *
+ * — and that function ends in `drmWaitVBlank()` on a CRTC that belongs to the X server. WebKit's own escape hatch is
+ * `WEBKIT_FORCE_VBLANK_TIMER`, read in `DisplayVBlankMonitor::create`: any value but "0" makes it use a timer at the
+ * nominal refresh rate instead of waiting for a display's vertical blank. MEASURED with it set: `started` 256 ms, commit
+ * 273 ms, and osnews finished at 678 ms — the 6.5 s is gone, and the same binary that took 7.3 s to load osnews takes
+ * 0.68 s.
+ *
+ * IT IS SET HERE, IN THE ENGINE, because it is a fact about this seam and not about an application: the engine is a CLIENT
+ * of Agora's window server and owns no display, so waiting for a vblank it cannot receive is always wrong here. A caller
+ * that knows better can set the variable itself — `setenv` with overwrite 0 leaves it alone — including "0" to force the
+ * DRM path back on. `webengine-startup` is the regression test: it asserts the first commit arrives inside 1.5 s. */
+static void ag_web_want_vblank_timer(void)
+{
+	if (getenv("WEBKIT_FORCE_VBLANK_TIMER") == NULL) {
+		setenv("WEBKIT_FORCE_VBLANK_TIMER", "1", 0);
+	}
+}
+
 AGWebEngine *AGWebEngineCreateWithOptions(int width, int height, AGWebExport export, void *gbm_device,
 					  const AGWebEngineCallbacks *callbacks, void *context)
 {
@@ -722,6 +747,7 @@ AGWebEngine *AGWebEngineCreateWithOptions(int width, int height, AGWebExport exp
 	WebKitWebViewBackend *view_backend;
 	int use_egl = 0;
 
+	ag_web_want_vblank_timer();
 	if (!ag_web_library_ready()) {
 		return NULL;
 	}

@@ -33,6 +33,16 @@ set(AGORA_WINDOW_SERVER_BINARY "${CMAKE_CURRENT_SOURCE_DIR}/../../window-server/
 # **LINKS, AND THE ONE CLICK A DRAG MUST NOT FOLLOW.** Two pages on disk, a click on the link between them, back, and the
 # suppressed click that must stay put — plus the check that suppression is a switch rather than a latch, since a single drag
 # that turned it off for good would leave the browser unable to follow anything.
+# **AND HOW LONG THE FIRST LOAD TAKES, WHICH ONCE TOOK 6.5 SECONDS.** The stall was a `drmWaitVBlank()` on a display this
+# process does not own; the engine forces the timer-based vblank monitor and this asserts the load starts inside 1.5 s. Set
+# `WEBKIT_FORCE_VBLANK_TIMER=0` to watch it fail.
+add_executable(webengine_startup webengine_startup.c)
+target_link_libraries(webengine_startup PRIVATE WebView)
+
+add_test(NAME webengine-startup COMMAND webengine_startup)
+set_tests_properties(webengine-startup PROPERTIES SKIP_RETURN_CODE 77
+  ENVIRONMENT "${_agora_webview_test_env}")
+
 add_executable(webengine_links webengine_links.c)
 target_link_libraries(webengine_links PRIVATE WebView)
 

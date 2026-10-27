@@ -396,6 +396,42 @@ make the field first responder, deliver each character as a real `NSEvent` throu
 "the typed address loaded" and "back went to the first page" are claims about WebKit, not about the app's own log line;
 the composed frame then has to show the first page's colour on the glass.
 
+## The first load took 6.5 seconds, and it was a vblank wait
+
+Building WPE WebKit 2.54.2 locally made every page take seven seconds before anything appeared. The number came from the
+view's own reflow timer, so the first guess was layout — and that was wrong in an instructive way.
+
+Measured with a bare engine (no window, no toolbar, no AppKit), timing each load stage:
+
+| | 2.48 (Debian) | 2.54.2 (local) | 2.54.2 + `WEBKIT_FORCE_VBLANK_TIMER=1` |
+|---|---|---|---|
+| load started | 314 ms | **6418 ms** | 256 ms |
+| commit | 319 ms | 6421 ms | 273 ms |
+| osnews finished | 921 ms | 7266 ms | **678 ms** |
+
+An **empty page** and a `file://` page cost the same 6.4 s, and the **second** load in the same engine took 13 ms — so it
+was neither network nor layout nor content: it was a one-time wait before the load even started. A `gdb` backtrace of the
+UI process while it waited named it:
+
+```
+WebPageProxy::loadRequest → launchProcess → finishAttachingToWebProcess → initializeWebPage
+  → creationParameters → DisplayLink::platformInitialize → DisplayVBlankMonitorDRM::create
+```
+
+`DisplayVBlankMonitorDRM::create` ends in `drmWaitVBlank()` on a CRTC the X server owns. This process is a client of Agora's
+window server; it has no display to wait on. WebKit's own escape hatch is `WEBKIT_FORCE_VBLANK_TIMER`, read in
+`DisplayVBlankMonitor::create`, and the engine sets it (`ag_web_want_vblank_timer`, only when the variable is unset) —
+6.5 s → 0.27 s, osnews 7.3 s → 0.68 s.
+
+`webengine-startup` is the regression test: a first load must start inside 1.5 s. Run it with `WEBKIT_FORCE_VBLANK_TIMER=0`
+and it reports the stall instead — **6411 ms** measured that way.
+
+**And one test had to change with the fix.** `webengine-page` required *two* damaged frames, on the reasoning that the first
+frame is the blank page exported before content commits. That was true of a slow start and false of a fast one: with the
+stall gone the first frame is already the finished page, nothing changes afterwards, so the damage callback fires once and
+the probe failed while its screenshot was perfect. It now samples the engine's own frame for the page's two colours — a
+stronger claim than "a frame happened", and one that does not depend on timing.
+
 ## How long a reflow takes, and what did not help
 
 A resize has to wait for WebKit to lay the page out again, and that is the whole of the delay. MEASURED on this machine with
