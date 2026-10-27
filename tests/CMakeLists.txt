@@ -102,6 +102,18 @@ add_test(NAME webengine-scale COMMAND webengine_scale)
 set_tests_properties(webengine-scale PROPERTIES SKIP_RETURN_CODE 77
   ENVIRONMENT "${_agora_webview_test_env}")
 
+# **THE CLASS IN A WINDOW, ON A SCALED OUTPUT.** Two bugs a person found in the demo and no test here could see: a window
+# resize arriving as `-setFrame:` (which the class did not override, so the page was stretched) and a device scale factor
+# read once, too early (so the page rendered at 1x and every glyph was resampled). At --scale 2 both are visible numbers.
+add_executable(webview_resize webview_resize.m)
+target_link_libraries(webview_resize PRIVATE WebView)
+
+add_test(NAME webview-resize
+  COMMAND "${CMAKE_CURRENT_SOURCE_DIR}/run-webview-resize.sh"
+          "$<TARGET_FILE:webview_resize>" "${AGORA_WINDOW_SERVER_BINARY}")
+set_tests_properties(webview-resize PROPERTIES SKIP_RETURN_CODE 77
+  ENVIRONMENT "${_agora_webview_test_env}")
+
 add_test(NAME webengine-page
   COMMAND "${CMAKE_CURRENT_SOURCE_DIR}/run-webengine.sh"
           "$<TARGET_FILE:webengine_probe>" "${AGORA_WINDOW_SERVER_BINARY}")

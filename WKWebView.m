@@ -86,7 +86,7 @@ static uint32_t ag_view_modifiers(NSUInteger flags)
 - (void)ag_engineDamagedInPixelsX:(int)x y:(int)y width:(int)width height:(int)height;
 - (void)ag_flushDamage;
 - (void)ag_engineLoadStage:(int)stage;
-- (void)ag_resizeEngine;
+- (void)ag_syncGeometry;
 @end
 
 /* **THE ENGINE'S CALLBACKS, WITH THE VIEW AS CONTEXT.** They arrive from `AGWebEngineIterate` on the run loop's own
@@ -194,12 +194,8 @@ static void ag_view_title_changed(void *context, AGWebEngine *engine, const char
 		callbacks.title_changed = ag_view_title_changed;
 		callbacks.damaged = ag_view_damaged;
 		_engine = AGWebEngineCreate(width, height, &callbacks, self);
-		if (_engine != NULL) {
-			/* **AND THE OUTPUT'S OWN SCALE, SO THE PAGE IS RENDERED AT IT RATHER THAN RESAMPLED UP TO IT.** MEASURED on this
-			 * machine's 1.332 panel: without this the engine painted 640x480 and the view drew that into an 852x639
-			 * surface, which is correct and visibly soft — every glyph resampled once. */
-			AGWebEngineSetDeviceScaleFactor((AGWebEngine *)_engine, _scale);
-		}
+			/* The scale and the size are pushed by `-ag_syncGeometry`, which asks the window rather than trusting whatever
+		 * `_scale` had been set to when this view was created. */
 	}
 	if (_engine == NULL) {
 		return;
@@ -212,7 +208,7 @@ static void ag_view_title_changed(void *context, AGWebEngine *engine, const char
 			_keyboard = keyboard;
 		}
 	}
-	[self ag_resizeEngine];
+	[self ag_syncGeometry];
 	/* **THE PUMP IS SCHEDULED ON THIS RUN LOOP AND KEPT.** A view created on a thread with no run loop — a test's
 	 * `main` before `NSApplication` starts — gets a timer that fires as soon as one runs, which is what makes the
 	 * offscreen test possible; the run loop the timer belongs to is the one current at creation. */
@@ -228,26 +224,56 @@ static void ag_view_title_changed(void *context, AGWebEngine *engine, const char
 /* **THE ENGINE'S SIZE IS THE VIEW'S SIZE IN DEVICE PIXELS**, and it is asked of the window rather than assumed: a
  * fractional scale makes the two numbers different, and the engine's drawing, its frame and every mouse coordinate are
  * all in ITS pixels. */
-- (void)ag_resizeEngine
+/* **THE VIEW'S GEOMETRY IS RE-DERIVED, NOT REMEMBERED, AND THAT IS THE WHOLE OF TWO BUGS.** MEASURED in the demo:
+ *
+ *   1. RESIZING THE WINDOW STRETCHED THE PAGE INSTEAD OF REFLOWING IT. The AppKit resizes a window's content view through
+ *      `-setFrame:`, and this class overrode only `-setFrameSize:` — so the engine kept the size it was born with and
+ *      `CGContextDrawImage` scaled that old frame into the new bounds. The page was not re-laid out because nobody told
+ *      the engine the viewport had changed.
+ *   2. THE PAGE WAS SOFT BY DEFAULT. `_scale` was read ONCE in `-viewDidMoveToWindow`, and a window does not know its
+ *      output's scale at that moment — it learns it from the compositor afterwards — so the factor stayed 1.0 and every
+ *      glyph was rendered at 1x and resampled up.
+ *
+ * So the scale is asked of the window EVERY TIME, the size every time, and the pair is pushed only when it differs from
+ * what was pushed last. Called from the frame doors, from `-drawRect:`, and from the pump — because "which door does the
+ * AppKit use" is a question this class should not have to answer twice. */
+- (void)ag_syncGeometry
 {
-	NSRect bounds;
 	int width;
 	int height;
+	CGFloat scale = 1.0;
 
 	if (_engine == NULL) {
 		return;
 	}
-	bounds = [self bounds];
-	width = (int)(bounds.size.width + 0.5);
-	height = (int)(bounds.size.height + 0.5);
+	if ([self window] != nil) {
+		CGFloat reported = [[self window] userSpaceScaleFactor];
+
+		if (reported > 0.0) {
+			scale = reported;
+		}
+	}
+	width = (int)([self bounds].size.width + 0.5);
+	height = (int)([self bounds].size.height + 0.5);
 	if (width < 1) {
 		width = 1;
 	}
 	if (height < 1) {
 		height = 1;
 	}
+	if (width == _pushed_points_width && height == _pushed_points_height && (double)scale == _pushed_scale) {
+		return;
+	}
+	if (getenv("WK_WEBVIEW_DIAG") != NULL) {
+		fprintf(stderr, "  DIAG geometry: %dx%d points at scale %.3f (was %dx%d at %.3f)\n", width, height,
+			(double)scale, _pushed_points_width, _pushed_points_height, _pushed_scale);
+	}
+	_pushed_points_width = width;
+	_pushed_points_height = height;
+	_pushed_scale = (double)scale;
+	_scale = scale;
+	AGWebEngineSetDeviceScaleFactor((AGWebEngine *)_engine, (double)scale);
 	AGWebEngineSetSize((AGWebEngine *)_engine, width, height);
-	AGWebEngineSetDeviceScaleFactor((AGWebEngine *)_engine, _scale);
 }
 
 - (void)ag_pump:(NSTimer *)timer
@@ -257,6 +283,10 @@ static void ag_view_title_changed(void *context, AGWebEngine *engine, const char
 		return;
 	}
 	AGWebEngineIterate((AGWebEngine *)_engine);
+	/* **AND THE GEOMETRY, EVERY TURN, WHICH IS CHEAP AND MAKES THE VIEW SELF-CORRECTING.** A window learns its output's
+	 * scale after it is on screen; a resize may arrive through any of the AppKit's doors; asking here means none of that
+	 * has to be known in advance. */
+	[self ag_syncGeometry];
 	if (_dirty) {
 		_dirty = NO;
 		[self ag_flushDamage];
@@ -459,8 +489,12 @@ static void ag_view_title_changed(void *context, AGWebEngine *engine, const char
 		 * uses no private door of another component for the one thing it must get right. */
 		CGFloat scale = [[self window] userSpaceScaleFactor];
 
+		if (getenv("WK_WEBVIEW_DIAG") != NULL) {
+			/* **WHAT THE WINDOW KNOWS AT THE MOMENT THE VIEW JOINS IT**, which is the number the old code trusted. */
+			fprintf(stderr, "  DIAG join: window scale is %.3f at -viewDidMoveToWindow\n", (double)scale);
+		}
 		_scale = (scale > 0.0) ? scale : 1.0;
-		[self ag_resizeEngine];
+		[self ag_syncGeometry];
 	}
 	_dirty = YES;
 	[self setNeedsDisplay:YES];
@@ -469,7 +503,16 @@ static void ag_view_title_changed(void *context, AGWebEngine *engine, const char
 - (void)setFrameSize:(NSSize)newSize
 {
 	[super setFrameSize:newSize];
-	[self ag_resizeEngine];
+	[self ag_syncGeometry];
+	_dirty = YES;
+}
+
+/* **AND THE DOOR THE APPKIT ACTUALLY USES FOR A WINDOW RESIZE.** `-setFrame:` is what `NSWindow` calls on its content view;
+ * `-setFrameSize:` is what a caller uses. Overriding one and not the other is the bug above, so both are here. */
+- (void)setFrame:(NSRect)frameRect
+{
+	[super setFrame:frameRect];
+	[self ag_syncGeometry];
 	_dirty = YES;
 }
 
@@ -546,6 +589,7 @@ static void ag_view_title_changed(void *context, AGWebEngine *engine, const char
 
 	(void)dirtyRect;
 	bounds = [self bounds];
+	[self ag_syncGeometry];
 	[self ag_updateImage];
 	cg = [[NSGraphicsContext currentContext] CGContext];
 	if (getenv("WK_WEBVIEW_DIAG") != NULL) {

@@ -75,6 +75,11 @@ NS_ASSUME_NONNULL_BEGIN
 	BOOL _dirty;
 	BOOL _loading;
 	CGFloat _scale;
+	/* **WHAT HAS ACTUALLY BEEN PUSHED TO THE ENGINE**, so the geometry can be re-derived cheaply on every turn and
+	 * pushed only when it really changed — see `-ag_syncGeometry`. */
+	int _pushed_points_width;
+	int _pushed_points_height;
+	double _pushed_scale;
 	NSString *_title;
 	NSString *_uri;
 	NSString *_pendingHTML;

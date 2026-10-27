@@ -109,6 +109,23 @@ top of that buffer, read back by the TEST and not by the engine (which is refuse
 from a hidden readback). A window's buffer needed all four steps above; with them, `webengine-window` — nested, opt-in,
 asserted on the composited screenshot — passes too.
 
+## What a person found that the tests did not
+
+Two symptoms reported from the running demo, and both were real:
+
+- **Resizing the window stretched the page instead of reflowing it.** `NSWindow` resizes its content view through
+  `-setFrame:`; `WKWebView` overrode only `-setFrameSize:`, so the engine kept its birth size and `CGContextDrawImage`
+  scaled the old frame into the new bounds. The class now overrides both, and re-derives its geometry on every pump and
+  every paint.
+- **The page was soft by default.** The device scale factor was read ONCE, in `-viewDidMoveToWindow` — and MEASURED with a
+  diagnostic on the demo application, that door sees **1.000** while the first pump sees **1.332**. The stored factor
+  stayed 1.0 for the life of the view, so the page was rendered at 1x and resampled into a 1.332x surface. The factor is
+  now asked of the window every time, and pushed only when it changes.
+
+`webview-resize` runs the class in a **real window at `--scale 2`** and asserts the outcome both ways: 400x300 points gives
+an 800x600 frame, and a window grown to 520x378 gives 1040x756. Disabling the fix reproduces the reported bug exactly — the
+frame stays 800x600 while the view grows, which is a page stretched rather than re-laid out.
+
 ## The demo: a page on the desktop
 
 ```sh
