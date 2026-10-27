@@ -228,7 +228,12 @@ by name.
 1. **The device scale factor** (`wpe_view_backend_dispatch_set_device_scale_factor`), so a page renders at an output's own
    device pixels instead of being scaled from points: the window probe sizes the engine to the buffer and that is right,
    but the engine never tells WebKit the factor itself, so its text layout is at 1x scaled up.
-2. **Resize under load**, which nothing has driven yet: `-setFrameSize:` reaches `AGWebEngineSetSize`, and what a resize
+2. **A window is invisible in the composite at scale 1.0 when the application centres it.** MEASURED while capturing a page: with
+   `AGORA_DPI=72` (scale 1) a `WKWebView` window at the centre of a 1280x940 output is drawn by AppKit and never appears on the
+   glass, while the same application at the machine's own 1.332 scale — and at scale 1 with the window near the bottom-left —
+   is fine. Repro: `AGORA_DPI=72 AGORA_SCREENSHOT=/tmp/x.ppm AGORA_SECONDS=5 demo/agora-webview.sh 1280x940 <url>`. Not chased
+   yet; it is a placement question in the seam or in `NSWindow`, not in the page.
+3. **Resize under load**, which nothing has driven yet: `-setFrameSize:` reaches `AGWebEngineSetSize`, and what a resize
    does to a *loading* page has not been measured.
 
 ## Licence

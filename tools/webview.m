@@ -28,6 +28,7 @@
 #import <AppKit/NSColor.h>
 #import <AppKit/NSGraphicsContext.h>
 #import <AppKit/AGStatusBarItemView.h>
+#import <AppKit/NSScreen.h>
 
 #import <Foundation/NSAutoreleasePool.h>
 #import <Foundation/NSDate.h>
@@ -36,6 +37,7 @@
 #import <Foundation/NSString.h>
 
 #include <stdio.h>
+#include <stdlib.h>
 #include <stdlib.h>
 #include <string.h>
 
@@ -90,10 +92,11 @@ int main(int argc, char **argv)
 	NSWindow *window;
 	WKWebView *view;
 	NSURL *url = nil;
+	NSRect content;
 	const char *title = "Agora web view";
 	int seconds = 0;
-	int width = 640;
-	int height = 480;
+	int width = 0;
+	int height = 0;
 	int i;
 
 	for (i = 1; i < argc; i++) {
@@ -118,15 +121,46 @@ int main(int argc, char **argv)
 	[application setActivationPolicy:NSApplicationActivationPolicyRegular];
 	[application finishLaunching];
 
-	window = [[NSWindow alloc] initWithContentRect:NSMakeRect(60.0, 80.0, (CGFloat)width, (CGFloat)height)
+	/* **A WINDOW THAT FITS THE SCREEN IT IS ON, UNLESS IT WAS TOLD HOW BIG TO BE.** A demo that opens at 640x480 on a
+	 * 1280x940 output shows a third of a page and invites the question of whether the page or the window is broken — and
+	 * the frame's ORIGIN IS THE BOTTOM-LEFT, so a hardcoded `y = 80` puts the window at the foot of the screen rather
+	 * than near its top. Both are measured rather than stylistic: this is what the first screenshot of osnews.com showed.
+	 */
+	{
+		NSScreen *screen = [NSScreen mainScreen];
+		NSRect visible = (screen != nil) ? [screen visibleFrame] : NSMakeRect(0.0, 0.0, 1280.0, 940.0);
+
+		if (width <= 0 || height <= 0) {
+			width = (int)(visible.size.width * 0.86);
+			height = (int)(visible.size.height * 0.90);
+		}
+		content = NSMakeRect(visible.origin.x + (visible.size.width - (CGFloat)width) / 2.0,
+				     visible.origin.y + (visible.size.height - (CGFloat)height) / 2.0,
+				     (CGFloat)width, (CGFloat)height);
+	}
+
+	window = [[NSWindow alloc] initWithContentRect:content
 					     styleMask:NSResizableWindowMask | NSTitledWindowMask | NSClosableWindowMask
 					       backing:NSBackingStoreBuffered
 						 defer:NO];
+	if (getenv("WK_WEBVIEW_DIAG") != NULL) {
+		fprintf(stderr, "  DIAG window: content %.0fx%.0f at (%.0f,%.0f), screen %.0fx%.0f at (%.0f,%.0f)\n",
+			content.size.width, content.size.height, content.origin.x, content.origin.y,
+			[NSScreen mainScreen] ? [[NSScreen mainScreen] visibleFrame].size.width : -1.0,
+			[NSScreen mainScreen] ? [[NSScreen mainScreen] visibleFrame].size.height : -1.0,
+			[NSScreen mainScreen] ? [[NSScreen mainScreen] visibleFrame].origin.x : -1.0,
+			[NSScreen mainScreen] ? [[NSScreen mainScreen] visibleFrame].origin.y : -1.0);
+	}
 	[window setTitle:[NSString stringWithUTF8String:title]];
 	view = [[WKWebView alloc] initWithFrame:NSMakeRect(0.0, 0.0, (CGFloat)width, (CGFloat)height)];
 	[view setNavigationDelegate:delegate];
 	[window setContentView:view];
 	[window makeKeyAndOrderFront:nil];
+	if (getenv("WK_WEBVIEW_DIAG") != NULL) {
+		fprintf(stderr, "  DIAG frame: %.0fx%.0f at (%.0f,%.0f), visible %d, content %.0fx%.0f\n",
+			[window frame].size.width, [window frame].size.height, [window frame].origin.x, [window frame].origin.y,
+			[window isVisible] ? 1 : 0, [view frame].size.width, [view frame].size.height);
+	}
 
 	if (url != nil) {
 		[view loadRequest:[NSURLRequest requestWithURL:url]];
