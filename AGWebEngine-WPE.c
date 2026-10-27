@@ -92,6 +92,15 @@ struct AGWebEngine {
 	int export_path;		/* AGWebExport, as it actually turned out */
 	uint32_t *scratch;		/* the readback, before the diff folds it into `frame` */
 	size_t scratch_size;
+	/* **THE PRESENT MODE'S DESTINATION.** Borrowed, set by the host before each frame, and used from inside the export
+	 * callback — which is the same moment WPE's buffer is alive and the only moment it is legal to draw the frame. */
+	int present_fd;
+	int present_width;
+	int present_height;
+	int present_stride;
+	unsigned int present_fourcc;
+	unsigned long long present_modifier;
+	unsigned int frames_presented;
 
 	int width;
 	int height;
@@ -312,11 +321,58 @@ static void ag_web_export_egl_image(void *data, struct wpe_fdo_egl_exported_imag
 	if (AGGLBeginFrame(engine->gl, width, height)) {
 		AGGLBlitTextureFlipped(engine->gl, texture, 0, 0, width, height);
 		AGGLEndFrame(engine->gl);
-		if (AGGLReadPixels(engine->gl, 0, 0, width, height, engine->scratch, width * 4)) {
-			ag_web_merge_frame(engine, engine->scratch, width, height, width * 4);
+		AGGLDeleteTexture(engine->gl, texture);
+		texture = 0;
+		if (engine->export_path == AGWebExportEGLPresent) {
+			/* **NO READBACK: THE FRAME GOES FROM THIS TARGET TO THE HOST'S BUFFER ON THE GPU.** The destination is
+			 * the host's, registered before this pump, and the blit is the same one the readback path makes — the only
+			 * difference is where it lands. */
+			AGGLRenderTarget *destination = NULL;
+
+			if (engine->present_fd >= 0) {
+				destination = AGGLRenderTargetFromDmabuf(engine->gl, engine->present_fd,
+									 engine->present_width, engine->present_height,
+									 engine->present_stride, engine->present_fourcc,
+									 engine->present_modifier);
+			}
+			if (destination == NULL && engine->present_fd >= 0) {
+				/* **NAMED RATHER THAN SILENT.** A present that cannot import the destination is a frame that never
+				 * arrives, and from the host's side that is indistinguishable from a page that stopped painting. The
+				 * numbers are what the import needs, so they are what the message carries. */
+				fprintf(stderr, "AGWebEngine: the present destination %dx%d stride %d fourcc 0x%08x modifier "
+						"0x%llx could not be imported\n", engine->present_width, engine->present_height,
+					engine->present_stride, engine->present_fourcc, engine->present_modifier);
+			}
+			if (destination != NULL) {
+				unsigned int frame_texture = AGGLTargetTexture(engine->gl);
+
+				if (AGGLBeginRenderTarget(engine->gl, destination)) {
+					AGGLBlitTextureFlipped(engine->gl, frame_texture, 0, 0, engine->present_width,
+							       engine->present_height);
+					AGGLEndRenderTarget(engine->gl);
+					engine->frames_presented++;
+				}
+				AGGLRenderTargetDestroy(engine->gl, destination);
+			}
+			/* **AND THE DIFF IS NOT COMPUTED, BECAUSE THERE ARE NO PIXELS TO DIFF.** A present-mode engine never reads its
+			 * frames back, so it reports the whole frame as damaged: the host knows a frame arrived, and a window that is
+			 * showing a page repaints all of it anyway. */
+			engine->damage_x = 0;
+			engine->damage_y = 0;
+			engine->damage_width = width;
+			engine->damage_height = height;
+			/* **AND `have_frame` STAYS FALSE, BECAUSE THERE ARE NO PIXELS TO DRAW.** The frame lives on the GPU; a caller
+			 * asking `AGWebEngineDraw` for it is asking the wrong question in this mode, and answering with the last
+			 * thing in `frame` would be a stale picture that looks alive. */
+		} else {
+			if (needed > 0 && AGGLReadPixels(engine->gl, 0, 0, width, height, engine->scratch, width * 4)) {
+				ag_web_merge_frame(engine, engine->scratch, width, height, width * 4);
+			}
 		}
 	}
-	AGGLDeleteTexture(engine->gl, texture);
+	if (texture != 0) {
+		AGGLDeleteTexture(engine->gl, texture);
+	}
 	/* The producer's image goes back before the frame is acknowledged, and the view is told last — the same order the
 	 * shared-memory path uses, and for the same reason (see this file's header). */
 	wpe_view_backend_exportable_fdo_egl_dispatch_release_exported_image(engine->exportable, exported);
@@ -537,6 +593,12 @@ AGWebEngine *AGWebEngineCreate(int width, int height, const AGWebEngineCallbacks
 AGWebEngine *AGWebEngineCreateWithExport(int width, int height, AGWebExport export,
 					 const AGWebEngineCallbacks *callbacks, void *context)
 {
+	return AGWebEngineCreateWithOptions(width, height, export, NULL, callbacks, context);
+}
+
+AGWebEngine *AGWebEngineCreateWithOptions(int width, int height, AGWebExport export, void *gbm_device,
+					  const AGWebEngineCallbacks *callbacks, void *context)
+{
 	AGWebEngine *engine;
 	WebKitWebViewBackend *view_backend;
 	int use_egl = 0;
@@ -552,14 +614,17 @@ AGWebEngine *AGWebEngineCreateWithExport(int width, int height, AGWebExport expo
 		engine->callbacks = *callbacks;
 	}
 	engine->context = context;
+	engine->present_fd = -1;
 	engine->width = width > 0 ? width : 1;
 	engine->height = height > 0 ? height : 1;
 
 	/* **THE GPU PATH IS ATTEMPTED FIRST WHEN IT WAS ASKED FOR, AND ABANDONED QUIETLY WHEN IT CANNOT RUN.** A machine with
 	 * no EGL — or with an EGL that cannot import a dma-buf — is not a failure of the engine: the frames are the same
 	 * pixels either way, and `AGWebEngineExportPath` is how the caller finds out which one it got. */
-	if (export == AGWebExportEGL) {
-		AGGLContext *gl = AGGLContextCreate(NULL);
+	if (export == AGWebExportEGL || export == AGWebExportEGLPresent) {
+		/* **THE DESTINATION'S OWN DEVICE WHEN THE CALLER NAMED ONE.** A present-mode engine draws into a window's dma-buf,
+		 * and a context on any other device cannot import it. */
+		AGGLContext *gl = (gbm_device != NULL) ? AGGLContextCreateWithGBM(gbm_device) : AGGLContextCreate(NULL);
 		void *display = NULL;
 
 		if (gl != NULL) {
@@ -573,12 +638,19 @@ AGWebEngine *AGWebEngineCreateWithExport(int width, int height, AGWebExport expo
 		}
 	}
 	if (use_egl) {
+		if (getenv("AG_WEBVIEW_DIAG") != NULL) {
+			AGGLInfo info;
+
+			AGGLContextInfo(engine->gl, &info);
+			fprintf(stderr, "AGWebEngine: EGL %s / %s (gbm=%d wayland=%d)\n", info.vendor, info.renderer,
+				info.gbm_display, info.wayland_display);
+		}
 		engine->exportable = wpe_view_backend_exportable_fdo_egl_create(&ag_web_egl_client, engine,
 									       (uint32_t)engine->width,
 									       (uint32_t)engine->height);
-		engine->export_path = AGWebExportEGL;
+		engine->export_path = (export == AGWebExportEGLPresent) ? AGWebExportEGLPresent : AGWebExportEGL;
 	} else {
-		if (export == AGWebExportEGL) {
+		if (export == AGWebExportEGL || export == AGWebExportEGLPresent) {
 			/* **ONE EXPORT PER PROCESS, AND THE FIRST ENGINE DECIDES.** `libwpebackend-fdo` is initialised ONCE — for
 			 * shared memory or for an EGL display, not both — so a process that has already made a shm engine cannot
 			 * have an EGL one. MEASURED: the second of the two in one process falls back, whatever order they are asked
@@ -709,7 +781,38 @@ const char *AGWebEngineExportPath(AGWebEngine *engine)
 	if (engine == NULL) {
 		return "none";
 	}
-	return (engine->export_path == AGWebExportEGL) ? "egl" : "shm";
+	switch (engine->export_path) {
+	case AGWebExportEGL:
+		return "egl";
+	case AGWebExportEGLPresent:
+		return "egl-present";
+	default:
+		return "shm";
+	}
+}
+
+int AGWebEngineSetPresentDMABUF(AGWebEngine *engine, int fd, int width, int height, int stride, unsigned int fourcc,
+				unsigned long long modifier)
+{
+	if (engine == NULL || engine->export_path != AGWebExportEGLPresent) {
+		return 0;
+	}
+	if (fd < 0 || width <= 0 || height <= 0 || stride <= 0) {
+		engine->present_fd = -1;
+		return 0;
+	}
+	engine->present_fd = fd;
+	engine->present_width = width;
+	engine->present_height = height;
+	engine->present_stride = stride;
+	engine->present_fourcc = fourcc;
+	engine->present_modifier = modifier;
+	return 1;
+}
+
+unsigned int AGWebEngineFramesPresented(AGWebEngine *engine)
+{
+	return (engine != NULL) ? engine->frames_presented : 0;
 }
 
 const char *AGWebEngineURI(AGWebEngine *engine)

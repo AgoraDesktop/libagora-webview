@@ -90,7 +90,12 @@ typedef struct AGWebEngineCallbacks {
  * engine, and `AGWebEngineExportPath` is how it checks what it got. */
 typedef enum {
 	AGWebExportSHM = 0,
-	AGWebExportEGL = 1
+	AGWebExportEGL = 1,
+	/* **THE SAME EGL FRAMES, COMPOSITED STRAIGHT INTO A BUFFER THE HOST NAMES** — a window's own dma-buf, through
+	 * `AGWebEngineSetPresentDMABUF`. Nothing is read back, so `AGWebEngineDraw` has no pixels to give in this mode (it
+	 * answers 0), and the cost of a frame is a GPU blit instead of a megapixel readback: MEASURED at 1280x800, 35 frames a
+	 * second read back against the display's own refresh without. */
+	AGWebExportEGLPresent = 2
 } AGWebExport;
 
 /* Create an engine sized in DEVICE pixels, with nothing loaded (the page is blank white, which is what a browser shows).
@@ -102,6 +107,28 @@ AGWebEngine *AGWebEngineCreate(int width, int height, const AGWebEngineCallbacks
 /* The same, choosing the export path. `AGWebEngineCreate` is this with `AGWebExportSHM`. */
 AGWebEngine *AGWebEngineCreateWithExport(int width, int height, AGWebExport export,
 					 const AGWebEngineCallbacks *callbacks, void *context);
+
+/* **AND THE SAME WITH THE DEVICE THE DESTINATION BUFFERS COME FROM**, which a present-mode engine MUST be told: it draws
+ * into a window's dma-buf, and a GL context on another device cannot import it. MEASURED: importing a window's buffer from
+ * a surfaceless context on this machine fails, and from outside that is a frame that never arrives. Pass
+ * `AGWindowServerNativeGBMDevice(server)` — a `struct gbm_device *`, typed `void *` here as everywhere in this seam — or
+ * NULL to let the engine pick its own device (which is right for `AGWebExportSHM` and for an EGL engine whose frames are
+ * only read back). */
+AGWebEngine *AGWebEngineCreateWithOptions(int width, int height, AGWebExport export, void *gbm_device,
+					  const AGWebEngineCallbacks *callbacks, void *context);
+
+/* **WHERE THE NEXT FRAMES ARE DRAWN, IN THE PRESENT MODE.** The descriptor is the destination's — a window's GPU buffer,
+ * typically — and it is BORROWED: the caller owns it and keeps it open, and it stays valid for as long as the caller says
+ * (a double-buffered window therefore registers its slot once per frame, before the engine is pumped).
+ *
+ * Returns 0 when this engine is not in a present mode, because the mode is a decision about what the engine produces and
+ * not something to change halfway. */
+int AGWebEngineSetPresentDMABUF(AGWebEngine *engine, int fd, int width, int height, int stride, unsigned int fourcc,
+				unsigned long long modifier);
+
+/* **HOW MANY FRAMES HAVE BEEN COMPOSITED**, which is what a host's loop needs to decide whether it has anything to commit:
+ * a frame began, the engine was pumped, nothing arrived, and `AGWindowCancelFrame` gives the slot back. */
+unsigned int AGWebEngineFramesPresented(AGWebEngine *engine);
 
 /* **WHICH PATH THIS ENGINE ACTUALLY TOOK**, as a name a diagnostic can print: `"shm"`, `"egl"`, or `"none"` for an
  * engine that is not running. A caller that asked for EGL and fell back needs to be able to see that rather than infer it

@@ -62,6 +62,28 @@ add_test(NAME webengine-egl COMMAND webengine_export)
 set_tests_properties(webengine-egl PROPERTIES SKIP_RETURN_CODE 77
   ENVIRONMENT "${_agora_webview_test_env}")
 
+# **THE PRESENT MODE: the frame goes into somebody else's GPU buffer, and the engine keeps no pixels.** The destination is
+# manufactured by the test (a texture exported to a descriptor), the engine is told to draw into it, and the TEST reads it
+# back — so a pass cannot come from the engine quietly reading its own frame, which the last check refuses.
+add_executable(webengine_gpu webengine_gpu.c)
+target_link_libraries(webengine_gpu PRIVATE WebView)
+
+add_test(NAME webengine-gpu COMMAND webengine_gpu)
+set_tests_properties(webengine-gpu PROPERTIES SKIP_RETURN_CODE 77
+  ENVIRONMENT "${_agora_webview_test_env}")
+
+# **AND THE WHOLE WINDOW, GPU TO GPU.** The window's own dma-buf is the destination: BeginFrameDMABUF, the engine draws into
+# it on the GPU, EndFrame (or CancelFrame when nothing arrived). Nested and opt-in, because a window only gets a dma-buf
+# from a compositor that imports them.
+add_executable(webengine_window webengine_window.c)
+target_link_libraries(webengine_window PRIVATE WebView)
+
+add_test(NAME webengine-window
+  COMMAND "${CMAKE_CURRENT_SOURCE_DIR}/run-webengine-window.sh"
+          "$<TARGET_FILE:webengine_window>" "${AGORA_WINDOW_SERVER_BINARY}")
+set_tests_properties(webengine-window PROPERTIES SKIP_RETURN_CODE 77
+  ENVIRONMENT "${_agora_webview_test_env}")
+
 add_test(NAME webengine-page
   COMMAND "${CMAKE_CURRENT_SOURCE_DIR}/run-webengine.sh"
           "$<TARGET_FILE:webengine_probe>" "${AGORA_WINDOW_SERVER_BINARY}")
