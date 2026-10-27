@@ -263,27 +263,74 @@ resize: window y=120 -> view y=120.0 -> the page says clientY=180 (want 180.0)
   ok   the page sees the pointer where the window put it
 ```
 
-## Selecting text, and a button mapping that was wrong
+## Selecting text: a build option, a modifier bit, and a click count
 
-Dragging over text selected nothing. The cause is in WebKit's WPE pointer path rather than in this component's mapping, and
-it was measured with a page that reports its own selection:
+Three separate things were tangled together here, and two of them were blamed on WebKit before measurement said otherwise.
 
-- `mousedown`, `mousemove` and `mouseup` all arrive, and `selectstart` fires — but **`MouseEvent.buttons` is 0 on every one
-  of them**, including the press, for every value of `wpe_input_pointer_event`'s `state` and `button` (0, 1, 2, 3, 4, 0x1f,
-  0x110 and combinations). WebKit's editor never sees a held button, so it never extends a selection.
-- What DOES work is the standard one: the press sets the anchor and a **SHIFT-modified click extends from it** — 47
-  characters in the probe. So `-mouseDragged:` forwards the motion (hover and the caret follow) and, at most thirty times a
-  second, a shift-click at the new point. The risk was links — a shift-click on a link opens one in some browsers — and it
-  was measured: neither a shift-click nor a plain click navigates in this engine yet, because no navigation policy is
-  installed. When policy handling arrives, that comment is where to revisit it.
-- **The first version was too aggressive**: dragging over a word selected the *whole paragraph*. WebKit counts presses as
-  multi-clicks by time AND distance, and a drag's first events move one or two pixels — so a press per event made a double
-  click (the word) and then a triple (the paragraph). MEASURED: presses 1-3 pixels apart selected **263** characters where
-  the same drag with six points between presses selected **30**. A shift-press is now only sent once the pointer has really
-  moved (six points), and the release comes once at mouse-up, so the steps cannot become clicks.
-- And the button numbers themselves were **wrong**: WPE's enum is 1 = LEFT, **2 = RIGHT, 3 = MIDDLE** (every other value
-  arrives as LEFT), where this seam had middle and right swapped. Found by sending each number to a page that prints
-  `MouseEvent.button`; fixed, with the numbers in the comment.
+### `MouseEvent.buttons` was our bug
+
+A page reads a held button from `MouseEvent.buttons`, and WebKit builds that mask from the pointer event's **`modifiers`**
+— `wpe_input_pointer_modifier_button1/2/3` — not from `wpe_input_pointer_event.state`. That is not guesswork: it is
+`pressedMouseButtons()` in WebKit 2.48's own `Source/WebKit/Shared/libwpe/WebEventFactory.cpp`, which says so in comments
+quoting the UI Events spec. This embedder set `state` faithfully and left the modifier bits at zero for a long time, so
+every page saw `buttons === 0` throughout every drag: drag handlers, drag-scrolling and `if (e.buttons === 1)` checks all
+saw a released mouse.
+
+The engine now keeps the held buttons in the mask and ORs them into every event (`pressed_buttons`). `webengine_input`
+asserts the page's own view of it:
+
+```
+input: with nothing held the page sees "buttons=0 button=0"
+input: with the left button held the page sees "buttons=1 button=0"
+input: after the release the page sees "buttons=0 button=0"
+```
+
+Remove the fix and the middle line fails with `wanted buttons=1`, which is how it was verified.
+
+### Dragging still cannot select — and that is a build option
+
+With `buttons` fixed, a real press-motion-release drag *still* selects nothing. The reason is not a bug in the port but a
+compile-time feature: WebKit 2.48's `Source/cmake/WebKitFeatures.cmake` defines
+
+```cmake
+WEBKIT_OPTION_DEFINE(ENABLE_DRAG_SUPPORT "Toggle support of drag actions (including selection of text with mouse)" PRIVATE OFF)
+```
+
+— **PRIVATE OFF**, and Debian's `debian/rules` never turns it on. The branch that extends a selection on mouse move,
+`EventHandler::handleMouseDraggedEvent`, is called from `handleMouseMoveEvent` inside `#if ENABLE_DRAG_SUPPORT`, so in this
+build it does not exist.
+
+MEASURED, because "not compiled in" has to be paid for: a press followed by ten motions each carrying `buttons === 1`
+selects **nothing** (`sel=0`), while in the same run a plain press places a caret (`anchorOffset=1` in a text node) and the
+drag's first motion fires `selectstart`. The press half of the path is intact; only the drag half is missing.
+
+So selection is extended the classic way: the press sets the anchor and a **SHIFT-modified click moves the extent**. A
+WebKit built with `-DENABLE_DRAG_SUPPORT=ON` would let the natural path work; nothing here depends on that.
+
+### A double click does select the word
+
+WebKit counts clicks itself — `clickCount()` in the same `WebEventFactory.cpp` compares time and distance (500 ms, 5 px)
+with no help from the embedder. Two plain presses on a word select it:
+
+```
+appkit_webview: a double click selected 9 character(s) — the page says "Agora web view sel=9"   ("Selection")
+```
+
+An earlier note in this file claimed double-click selection could not work because no click count reaches WebKit. That was
+wrong: it already worked, and the assertion exists so that a future change to the pointer stream cannot quietly break it.
+
+### The emulation was too aggressive at first
+
+Dragging over a word selected the *whole paragraph*. WebKit counts presses as multi-clicks by time AND distance, and a
+drag's first events move one or two pixels — so a press per event made a double click (the word) and then a triple (the
+paragraph). MEASURED: presses 1-3 pixels apart selected **263** characters where the same drag with six points between
+presses selected **30**. A shift-press is now only sent once the pointer has really moved (six points), and the release
+comes once at mouse-up, so the steps cannot become clicks.
+
+### And the button numbers were wrong
+
+WPE's enum is 1 = LEFT, **2 = RIGHT, 3 = MIDDLE** (every other value arrives as LEFT), where this seam had middle and right
+swapped. Found by sending each number to a page that prints `MouseEvent.button`; fixed, with the numbers in the comment.
 
 ## How long a reflow takes, and what did not help
 

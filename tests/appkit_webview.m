@@ -345,6 +345,60 @@ int main(void)
 		check(selected < 60, "and it selected the span that was dragged over, not the whole paragraph");
 	}
 
+	/* 2b. **A DOUBLE CLICK SELECTS THE WORD, AND NOTHING HERE HAS TO HELP IT.** Two plain presses in the same place inside
+	 * half a second are click 2 as far as WebKit is concerned, and it selects the word itself — MEASURED against its own
+	 * `Shared/libwpe/WebEventFactory.cpp`, which computes the count from TIME and DISTANCE (500 ms, 5 px) with no help
+	 * from the embedder. The page's first word is "Selection", nine characters, so a word selection is a short non-empty
+	 * one and a paragraph would be seventy-four. This is asserted because the fix for the drag in step 2 was originally
+	 * believed to make double clicks impossible — a held SHIFT somewhere in the pointer stream does exactly that — and
+	 * the only way to keep it working is to notice when it stops. */
+	{
+		int word = -1;
+		int tries;
+		int round;
+
+		for (round = 0; round < 2; round++) {
+			NSEvent *click;
+			double at = 3.6 + 0.12 * round;
+
+			click = [NSEvent mouseEventWithType:NSLeftMouseDown
+						  location:NSMakePoint(20.0, (CGFloat)(H - 88))
+					     modifierFlags:0
+						 timestamp:at
+					      windowNumber:0
+						   context:nil
+					       eventNumber:50 + 2 * round
+						clickCount:round + 1
+						  pressure:0.0f];
+			[view mouseDown:click];
+			pump(0.02);
+			click = [NSEvent mouseEventWithType:NSLeftMouseUp
+						  location:NSMakePoint(20.0, (CGFloat)(H - 88))
+					     modifierFlags:0
+						 timestamp:at + 0.03
+					      windowNumber:0
+						   context:nil
+					       eventNumber:51 + 2 * round
+						clickCount:round + 1
+						  pressure:0.0f];
+			[view mouseUp:click];
+			pump(0.06);
+		}
+		for (tries = 0; tries < 20 && word <= 0; tries++) {
+			pump(0.05);
+			if ([view title] != nil) {
+				const char *title = [[view title] UTF8String];
+				const char *sel = title != NULL ? strstr(title, "sel=") : NULL;
+
+				word = (sel != NULL) ? atoi(sel + 4) : -1;
+			}
+		}
+		printf("appkit_webview: a double click selected %d character(s) — the page says \"%s\"\n", word,
+		       [[view title] UTF8String] ?: "");
+		check(word > 0, "a double click selected the word under the pointer");
+		check(word < 15, "and the word, not the sentence it lives in");
+	}
+
 	/* 2c. **A PLAIN CLICK OUTSIDE THE SELECTION CLEARS IT.** Reported from the demo: after a drag, one click elsewhere left the
 	 * selection in place. A click that lands anywhere else is the ordinary way to say "I am done with that", and the likely
 	 * cause is a press our drag emulation never released — a held SHIFT makes every later click an extension rather than a

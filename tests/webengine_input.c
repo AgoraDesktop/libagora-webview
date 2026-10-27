@@ -96,6 +96,25 @@ static void nap(int milliseconds)
 	nanosleep(&ts, NULL);
 }
 
+/* **PUMPS UNTIL THE PAGE SAYS SOMETHING, BECAUSE THE TITLE LAGS ITS EVENT BY A TURN.** MEASURED: sending a pointer event
+ * and reading the title straight after it reports the PREVIOUS event's answer — the event crosses to the web process
+ * asynchronously, so a fixed sleep long enough for one is still a race. Every wait in this probe is "until", not "for". */
+static int wait_for_title(struct App *app, const char *want, int timeout_ms)
+{
+	int started = now_ms();
+
+	while (now_ms() - started < timeout_ms) {
+		const char *seen = AGWebEngineTitle(app->engine);
+
+		if (seen != NULL && strstr(seen, want) != NULL) {
+			return 1;
+		}
+		AGWebEngineIterate(app->engine);
+		nap(5);
+	}
+	return 0;
+}
+
 /* The newest frame, drawn into this probe's own buffer and sampled — the same call a view makes in `-drawRect:`. */
 static uint32_t sample(struct App *app, int x, int y)
 {
@@ -176,6 +195,8 @@ int main(void)
 		"<script>"
 		"document.getElementById('hover').addEventListener('click', function (e) {"
 		"  e.target.style.background = '#ffff00'; });"
+		"window.addEventListener('mousemove', function (e) {"
+		"  document.title = 'buttons=' + e.buttons + ' button=' + e.button; });"
 		"window.addEventListener('keydown', function () {"
 		"  document.getElementById('key').style.background = '#ff0000'; });"
 		"</script></body></html>";
@@ -263,6 +284,42 @@ int main(void)
 		printf("input: click ok\n");
 	} else {
 		failures++;
+	}
+
+	/* 2b. **THE BUTTONS A PAGE SEES, WHICH IS NOT THE SAME QUESTION AS WHICH BUTTON CLICKED.** A page's
+	 * `MouseEvent.buttons` is a MASK of everything held down, and WebKit builds it from the pointer event's
+	 * `modifiers` — `wpe_input_pointer_modifier_button1` and friends, MEASURED against its own
+	 * `Shared/libwpe/WebEventFactory.cpp` — NOT from `wpe_input_pointer_event.state`, which is what this embedder set
+	 * faithfully for a long time. The result was `buttons === 0` on every event of every drag: page drag handlers,
+	 * drag-scrolling and `if (e.buttons === 1)` checks all silently saw a released mouse. The engine now carries the
+	 * held button in the mask, and this is the assertion that says so. */
+	{
+		static const char *const want[] = { "buttons=0", "buttons=1", "buttons=0" };
+		static const char *const what[] = { "with nothing held", "with the left button held", "after the release" };
+		int step;
+
+		for (step = 0; step < 3; step++) {
+			if (step == 0) {
+				AGWebEnginePointerMotion(app.engine, HOVER_X, HOVER_Y, 0, (uint32_t)now_ms());
+			} else if (step == 1) {
+				AGWebEnginePointerButton(app.engine, HOVER_X, HOVER_Y, 0x110u, 1, 0, (uint32_t)now_ms());
+				AGWebEnginePointerMotion(app.engine, HOVER_X, HOVER_Y + 2, 0, (uint32_t)now_ms());
+			} else {
+				AGWebEnginePointerButton(app.engine, HOVER_X, HOVER_Y + 2, 0x110u, 0, 0, (uint32_t)now_ms());
+				AGWebEnginePointerMotion(app.engine, HOVER_X, HOVER_Y + 4, 0, (uint32_t)now_ms());
+			}
+			if (wait_for_title(&app, want[step], 3000)) {
+				const char *seen = AGWebEngineTitle(app.engine);
+
+				printf("input: %s the page sees \"%s\"\n", what[step], seen != NULL ? seen : "(no title)");
+			} else {
+				const char *seen = AGWebEngineTitle(app.engine);
+
+				fprintf(stderr, "input: %s the page saw \"%s\", wanted %s\n", what[step],
+					seen != NULL ? seen : "(no title)", want[step]);
+				failures++;
+			}
+		}
 	}
 
 	/* 3. THE KEYBOARD. */

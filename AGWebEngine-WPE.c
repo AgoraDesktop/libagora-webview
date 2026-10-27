@@ -108,6 +108,21 @@ struct AGWebEngine {
 	 * keeps the last composited frame, so this flag says "there is something to put into the next destination". */
 	int frame_pending;
 
+	/* **WHICH BUTTONS ARE DOWN, IN WPE'S OWN MODIFIER BITS.** This is not how a pointer API usually works — it is how THIS
+	 * one works, and it is worth the paragraph because getting it wrong is invisible: MEASURED against WebKit's own source
+	 * (2.48, `Shared/libwpe/WebEventFactory.cpp`), a page's `MouseEvent.buttons` is built from
+	 * `event->modifiers & wpe_input_pointer_modifier_button1/2/3` — NOT from `event->state` and NOT from `event->button`. So
+	 * a host that sets `state` faithfully (as this one did) and leaves the modifier bits at zero produces `buttons === 0` on
+	 * every event, which is what a page reads as "no button is being held": no drag-scrolling, no drag handlers, and
+	 * `e.buttons === 1` checks in page scripts failing silently. The mask is kept here rather than asked of the caller
+	 * because a caller cannot be expected to remember it on every motion, and forgetting it on ONE event is a release as
+	 * far as the page is concerned.
+	 *
+	 * WPE 1.16's header spells these `wpe_input_pointer_modifier_button1`..`button5`; the pointer event struct reserves
+	 * the same field for keyboard modifiers, so the two are ORed together.
+	 */
+	uint32_t pressed_buttons;
+
 	/* **THE SIZE IS IN POINTS AND THE FACTOR IS WHAT MAKES PIXELS.** See `AGWebEngineSetDeviceScaleFactor`: WebKit lays
 	 * the page out for these, and paints `points x device_scale` device pixels. */
 	int width;
@@ -455,7 +470,8 @@ void AGWebEnginePointerMotion(AGWebEngine *engine, int x, int y, uint32_t modifi
 	event.time = time_ms;
 	event.x = x;
 	event.y = y;
-	event.modifiers = ag_web_modifiers(modifiers);
+	/* THE HELD BUTTONS RIDE ALONG, which is what makes a drag a drag to the page — see `pressed_buttons`. */
+	event.modifiers = ag_web_modifiers(modifiers) | engine->pressed_buttons;
 	wpe_view_backend_dispatch_pointer_event(engine->backend, &event);
 }
 
@@ -501,7 +517,24 @@ void AGWebEnginePointerButton(AGWebEngine *engine, int x, int y, uint32_t button
 	}
 
 	event.state = pressed ? 1 : 0;
-	event.modifiers = ag_web_modifiers(modifiers);
+	/* **THE MASK MOVES WITH THE PRESS AND THE RELEASE**, and this event itself carries the new value: a press reports its
+	 * own button as down, a release reports it gone, which is the shape a page expects from a real mouse. */
+	{
+		uint32_t bit = 0;
+
+		switch (event.button) {
+		case 1: bit = wpe_input_pointer_modifier_button1; break;
+		case 2: bit = wpe_input_pointer_modifier_button2; break;
+		case 3: bit = wpe_input_pointer_modifier_button3; break;
+		default: break;
+		}
+		if (pressed) {
+			engine->pressed_buttons |= bit;
+		} else {
+			engine->pressed_buttons &= ~bit;
+		}
+	}
+	event.modifiers = ag_web_modifiers(modifiers) | engine->pressed_buttons;
 	wpe_view_backend_dispatch_pointer_event(engine->backend, &event);
 }
 
