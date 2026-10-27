@@ -186,8 +186,13 @@ int main(void)
 		"  #spacer { height:200px; background:#0000c0; }"
 		"  #marker { height:200px; background:#00ffff; }"
 		"</style></head><body>"
-		"<div id=strip></div><div id=hover></div><div id=spacer></div><div id=marker></div>"
+		"<div id=strip></div><div id=hover></div>"
+		"<div id=prose style='padding:4px 0; font:14px sans-serif; color:#ffffff; background:#0000c0'>"
+		"Selection should cover this sentence when the pointer is dragged across it.</div>"
+		"<div id=spacer></div><div id=marker></div>"
 		"<div style='height:400px;background:#0000c0'></div>"
+		"<script>document.addEventListener('selectionchange',function(){"
+		"document.title='Agora web view sel='+String(String(window.getSelection()).length);});</script>"
 		"</body></html>";
 	AGWebDelegate *delegate = [[AGWebDelegate alloc] init];
 	WKWebView *view;
@@ -213,7 +218,7 @@ int main(void)
 
 	check(delegate->finished > 0, "the page finished loading (the delegate heard it)");
 	check([view isLoading] == NO, "the view reports the load finished");
-	check([view title] != nil && [[view title] isEqualToString:@"Agora web view"], "the title is the page's own");
+	check([view title] != nil && [[view title] hasPrefix:@"Agora web view"], "the title is the page's own");
 	check([view frameSizeInPixels].width == W && [view frameSizeInPixels].height == H,
 	      "the engine's frame is the view's size in device pixels");
 
@@ -274,6 +279,65 @@ int main(void)
 			check(damage.origin.y + damage.size.height <= (CGFloat)H * 0.9,
 			      "and the band is where the hovered box is, not the whole surface");
 		}
+	}
+
+	/* 2b. **A DRAG SELECTS TEXT, AND IT HAS TO HAPPEN BEFORE THE WHEEL.** Two reasons, both measured: the drag needs the
+	 * prose on screen (step 3 scrolls the page, and a drag after it selected nothing because the text had left the viewport),
+	 * and the pointer door cannot select in this WebKit at all — `event.buttons` is 0 throughout, so the class emulates the
+	 * drag as shift-clicks from the anchor the press set (see `-mouseDragged:`). What is asserted is the outcome a person
+	 * sees: a selection exists, and the page says how much of it there is. */
+	{
+		int selected = 0;
+		int tries;
+
+		event = [NSEvent mouseEventWithType:NSLeftMouseDown
+					   location:NSMakePoint(10.0, (CGFloat)(H - 88))
+				      modifierFlags:0
+					  timestamp:3.0
+				       windowNumber:0
+					    context:nil
+					eventNumber:4
+					 clickCount:1
+					   pressure:0.0f];
+		[view mouseDown:event];
+		for (tries = 0; tries < 12; tries++) {
+			event = [NSEvent mouseEventWithType:NSLeftMouseDragged
+						   location:NSMakePoint(10.0 + (CGFloat)tries * 18.0, (CGFloat)(H - 88))
+					      modifierFlags:0
+						  timestamp:3.1 + 0.01 * tries
+					       windowNumber:0
+						    context:nil
+						eventNumber:5 + tries
+						 clickCount:1
+						   pressure:0.0f];
+			[view mouseDragged:event];
+			pump(0.05);
+		}
+		event = [NSEvent mouseEventWithType:NSLeftMouseUp
+					   location:NSMakePoint(10.0 + 12.0 * 18.0, (CGFloat)(H - 88))
+				      modifierFlags:0
+					  timestamp:3.5
+				       windowNumber:0
+					    context:nil
+					eventNumber:20
+					 clickCount:1
+					   pressure:0.0f];
+		[view mouseUp:event];
+		for (tries = 0; tries < 20 && !selected; tries++) {
+			pump(0.05);
+			if ([view title] != nil) {
+				const char *title = [[view title] UTF8String];
+
+				if (title != NULL) {
+					const char *sel = strstr(title, "sel=");
+
+					selected = (sel != NULL) ? atoi(sel + 4) : 0;
+				}
+			}
+		}
+		printf("appkit_webview: the drag selected %d character(s) — title \"%s\"\n", selected,
+		       [[view title] UTF8String] ?: "");
+		check(selected > 0, "a pointer drag selected text (emulated as shift-clicks from the anchor)");
 	}
 
 	/* 3. THE WHEEL, IN APPKIT'S SIGN. `deltaY` is positive when a person scrolls UP, and the cyan band begins 280 points

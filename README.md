@@ -247,6 +247,23 @@ cmake --build build -j"$(nproc)" && ctest --test-dir build --output-on-failure
 `appkit-readme-refs`-style guards are not here yet: this document names no test files, and the two tests are registered
 by name.
 
+## Selecting text, and a button mapping that was wrong
+
+Dragging over text selected nothing. The cause is in WebKit's WPE pointer path rather than in this component's mapping, and
+it was measured with a page that reports its own selection:
+
+- `mousedown`, `mousemove` and `mouseup` all arrive, and `selectstart` fires — but **`MouseEvent.buttons` is 0 on every one
+  of them**, including the press, for every value of `wpe_input_pointer_event`'s `state` and `button` (0, 1, 2, 3, 4, 0x1f,
+  0x110 and combinations). WebKit's editor never sees a held button, so it never extends a selection.
+- What DOES work is the standard one: the press sets the anchor and a **SHIFT-modified click extends from it** — 47
+  characters in the probe. So `-mouseDragged:` forwards the motion (hover and the caret follow) and, at most thirty times a
+  second, a shift-click at the new point. The risk was links — a shift-click on a link opens one in some browsers — and it
+  was measured: neither a shift-click nor a plain click navigates in this engine yet, because no navigation policy is
+  installed. When policy handling arrives, that comment is where to revisit it.
+- And the button numbers themselves were **wrong**: WPE's enum is 1 = LEFT, **2 = RIGHT, 3 = MIDDLE** (every other value
+  arrives as LEFT), where this seam had middle and right swapped. Found by sending each number to a page that prints
+  `MouseEvent.button`; fixed, with the numbers in the comment.
+
 ## How long a reflow takes, and what did not help
 
 A resize has to wait for WebKit to lay the page out again, and that is the whole of the delay. MEASURED on this machine with

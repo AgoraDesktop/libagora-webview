@@ -81,6 +81,8 @@ NS_ASSUME_NONNULL_BEGIN
 	 * during a resize is a number rather than an impression. */
 	double _geometry_changed_ms;
 	double _geometry_answered_ms;
+	/* **WHEN THE LAST DRAG-EXTENSION WENT OUT**, because a drag delivers more events than a page needs. */
+	double _last_drag_extend_ms;
 	int _pushed_points_width;
 	int _pushed_points_height;
 	double _pushed_scale;

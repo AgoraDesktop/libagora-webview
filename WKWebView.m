@@ -80,6 +80,14 @@ static uint32_t ag_view_modifiers(NSUInteger flags)
 	return modifiers;
 }
 
+static double ag_now_ms(void)
+{
+	struct timespec now;
+
+	clock_gettime(CLOCK_MONOTONIC, &now);
+	return now.tv_sec * 1000.0 + now.tv_nsec / 1e6;
+}
+
 @interface WKWebView ()
 - (void)ag_ensureEngine;
 - (void)ag_pump:(NSTimer *)timer;
@@ -737,9 +745,40 @@ static void ag_view_title_changed(void *context, AGWebEngine *engine, const char
 	[self ag_sendButton:0x112u pressed:NO withEvent:event];
 }
 
+/* **A DRAG SELECTS TEXT BY BEING A SHIFT-CLICK, AND THAT IS A WORKAROUND WITH A MEASUREMENT BEHIND IT.** Dragging over text
+ * selected nothing: MEASURED with a page that reports its own selection, WebKit's WPE pointer path delivers `mousedown` and
+ * `mousemove` but reports `event.buttons === 0` throughout — for every value of `wpe_input_pointer_event`'s `state` and
+ * `button` (0, 1, 2, 3, 4, 0x1f, 0x110, in every combination) — so its editor never sees a held button and never extends a
+ * selection. What DOES work is the standard one: the press sets the anchor, and a SHIFT-modified click extends the selection
+ * from it. So a drag forwards its motion (hover and the caret follow) and, at most thirty times a second, a shift-click at
+ * the new point.
+ *
+ * THE RISK WAS LINKS, and it was measured rather than assumed: a shift-click on a link in this engine does NOT navigate
+ * (nor does a plain click — no navigation policy is installed yet), so a drag that crosses a link cannot open one. When
+ * policy handling arrives, this comment is the place that has to be revisited. */
 - (void)mouseDragged:(NSEvent *)event
 {
+	NSPoint point;
+	double now;
+
 	[self mouseMoved:event];
+	if (_engine == NULL) {
+		return;
+	}
+	now = ag_now_ms();
+	if (now - _last_drag_extend_ms < 30.0) {
+		return;			/* a drag is 60 events a second; the page needs a few */
+	}
+	_last_drag_extend_ms = now;
+	point = [self ag_enginePointForEvent:event];
+	AGWebEnginePointerButton((AGWebEngine *)_engine, (int)(point.x + 0.5), (int)(point.y + 0.5), 0x110u, 1,
+				 AGModifierShift, [self ag_timeForEvent:event]);
+	/* **THE PAIR IS SEPARATED BY A TURN OF THE ENGINE, NOT JUST BY TWO CALLS.** WebKit handles a press and a release that
+	 * arrive in one pass as a click whose selection is decided once; MEASURED, back-to-back dispatches selected nothing
+	 * where the same pair with an iterate between them selected 47 characters. */
+	AGWebEngineIterate((AGWebEngine *)_engine);
+	AGWebEnginePointerButton((AGWebEngine *)_engine, (int)(point.x + 0.5), (int)(point.y + 0.5), 0x110u, 0,
+				 AGModifierShift, [self ag_timeForEvent:event]);
 }
 
 - (void)mouseMoved:(NSEvent *)event

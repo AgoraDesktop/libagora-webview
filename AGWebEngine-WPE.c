@@ -475,33 +475,31 @@ void AGWebEnginePointerButton(AGWebEngine *engine, int x, int y, uint32_t button
 	event.time = time_ms;
 	event.x = x;
 	event.y = y;
-	/* **WPE COUNTS ITS BUTTONS FROM ONE AND THE APPKIT COUNTS IN EVDEV CODES, WHICH IS A MEASUREMENT AND NOT A GUESS.**
-	 * `wpe_input_pointer_event.button` is 1 left, 2 middle, 3 right — so passing `0x110` (BTN_LEFT) through, which is
-	 * what every other door in this seam takes, delivers a click NOBODY HEARS. MEASURED on a page whose listeners paint
-	 * the element: `0x110` produced neither a `mousedown` nor a `click`, while `1` produced both. The AppKit's codes are
-	 * translated here so a caller keeps the vocabulary it has everywhere else. */
+	/* **WPE'S BUTTON NUMBERS ARE A SMALL ENUM, AND IT IS NOT THE ONE AN EVDEV CODE SUGGESTS.** MEASURED by sending each
+	 * number to a page that prints `MouseEvent.button`: WPE 1 is LEFT, **2 is RIGHT and 3 is MIDDLE** — a middle-then-right
+	 * order that is neither the evdev codes nor X11's 1/2/3, and every value outside 1..3 arrives at the page as LEFT. So
+	 * the AppKit's evdev codes (what every other door in this seam takes) are mapped here, and the first version of this
+	 * switch had middle and right SWAPPED, which is exactly the sort of thing only a measurement finds.
+	 *
+	 * The side and extra buttons have no number in this enum; they are mapped to LEFT because that is what this WebKit does
+	 * with a number it does not know, and a named comment is better than a silent surprise. */
 	switch (button) {
 	case 0x110u:			/* BTN_LEFT */
 		event.button = 1;
 		break;
 	case 0x111u:			/* BTN_MIDDLE */
-		event.button = 2;
-		break;
-	case 0x112u:			/* BTN_RIGHT */
 		event.button = 3;
 		break;
-	case 0x113u:			/* BTN_SIDE — the first thumb button, which WebKit calls "back" */
-		event.button = 8;
+	case 0x112u:			/* BTN_RIGHT */
+		event.button = 2;
 		break;
-	case 0x114u:			/* BTN_EXTRA — the second, "forward" */
-		event.button = 9;
-		break;
+	case 0x113u:			/* BTN_SIDE — no number in this enum */
+	case 0x114u:			/* BTN_EXTRA — likewise */
 	default:
-		/* Anything else is passed through: the seam does not pretend to know a device it has never seen, and a
-		 * caller with an exotic button can still reach the page. */
-		event.button = button;
+		event.button = 1;
 		break;
 	}
+
 	event.state = pressed ? 1 : 0;
 	event.modifiers = ag_web_modifiers(modifiers);
 	wpe_view_backend_dispatch_pointer_event(engine->backend, &event);
