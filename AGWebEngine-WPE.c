@@ -908,6 +908,38 @@ const char *AGWebEngineURI(AGWebEngine *engine)
 	return webkit_web_view_get_uri(engine->view);
 }
 
+int AGWebEngineCanGoBack(AGWebEngine *engine)
+{
+	if (engine == NULL || engine->view == NULL) {
+		return 0;
+	}
+	return webkit_web_view_can_go_back(engine->view) ? 1 : 0;
+}
+
+void AGWebEngineGoBack(AGWebEngine *engine)
+{
+	if (engine == NULL || engine->view == NULL) {
+		return;
+	}
+	webkit_web_view_go_back(engine->view);
+}
+
+int AGWebEngineCanGoForward(AGWebEngine *engine)
+{
+	if (engine == NULL || engine->view == NULL) {
+		return 0;
+	}
+	return webkit_web_view_can_go_forward(engine->view) ? 1 : 0;
+}
+
+void AGWebEngineGoForward(AGWebEngine *engine)
+{
+	if (engine == NULL || engine->view == NULL) {
+		return;
+	}
+	webkit_web_view_go_forward(engine->view);
+}
+
 const char *AGWebEngineTitle(AGWebEngine *engine)
 {
 	if (engine == NULL || engine->view == NULL) {

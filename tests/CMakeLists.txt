@@ -103,6 +103,16 @@ add_test(NAME webview-app
 set_tests_properties(webview-app PROPERTIES SKIP_RETURN_CODE 77
   ENVIRONMENT "${_agora_webview_test_env}")
 
+# **AND THE TOOLBAR, DRIVEN THE WAY A PERSON DRIVES IT**: the field is clicked, characters are typed as real key events
+# through the AppKit's field editor, Return sends the field's action, and the Back button's own action navigates. The
+# assertion is the page's title twice — the typed address loaded, and Back returned — plus the first page's colour in the
+# composed frame.
+add_test(NAME webview-toolbar
+  COMMAND "${CMAKE_CURRENT_SOURCE_DIR}/run-webview-toolbar.sh"
+          "$<TARGET_FILE:agora-webview>" "${AGORA_WINDOW_SERVER_BINARY}")
+set_tests_properties(webview-toolbar PROPERTIES SKIP_RETURN_CODE 77
+  ENVIRONMENT "${_agora_webview_test_env}")
+
 # **THE TWO NUMBERS A PAGE IS LAID OUT WITH**: the device scale factor (points -> pixels), and a resize that happens while
 # the page is still loading. Both are asserted by the page's own geometry: a 40-point band is 80 device rows at factor 2,
 # and 40 rows — not 17 — after a resize to 320x200, because 17 is what stretching a 640x480 layout would give.

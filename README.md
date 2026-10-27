@@ -351,6 +351,30 @@ comes once at mouse-up, so the steps cannot become clicks.
 WPE's enum is 1 = LEFT, **2 = RIGHT, 3 = MIDDLE** (every other value arrives as LEFT), where this seam had middle and right
 swapped. Found by sending each number to a page that prints `MouseEvent.button`; fixed, with the numbers in the comment.
 
+## The demo's toolbar: back, forward, and a URL field
+
+`tools/webview.m` puts an `NSToolbar` on the window with two buttons and an editable `NSTextField`. Nothing about it is a
+mock: the field is a real one, so typing goes through the AppKit's field editor, Return ends the session and sends the
+control's action, and the buttons' own actions are what navigate.
+
+The engine grew four doors for it — `AGWebEngineCanGoBack`/`GoBack`/`CanGoForward`/`GoForward` — wrapping WebKit's own
+back/forward list; `WKWebView` exposes them as `-canGoBack`, `-goBack`, `-canGoForward`, `-goForward`. "Can" is asked
+separately from doing it so the buttons grey out instead of being pressed into a no-op, and a typed address with no scheme
+gets `https://` because that is what people type.
+
+`webview-toolbar` asserts the whole gesture, twice over:
+
+```
+ok: the URL field loaded the typed address, and Back returned to the first page
+ok: the frame after Back is the first page
+```
+
+It runs the real application on a real compositor with `--type-url` and `--back-after`, which make the app act like a hand:
+make the field first responder, deliver each character as a real `NSEvent` through `-sendEvent:`, press Return, then
+`-performClick:` the Back button. The assertions are the *page's* titles — logged by the demo from the page itself — so
+"the typed address loaded" and "back went to the first page" are claims about WebKit, not about the app's own log line;
+the composed frame then has to show the first page's colour on the glass.
+
 ## How long a reflow takes, and what did not help
 
 A resize has to wait for WebKit to lay the page out again, and that is the whole of the delay. MEASURED on this machine with

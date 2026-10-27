@@ -452,6 +452,30 @@ static void ag_view_title_changed(void *context, AGWebEngine *engine, const char
 	return (uri != NULL) ? [NSURL URLWithString:[NSString stringWithUTF8String:uri]] : nil;
 }
 
+- (BOOL)canGoBack
+{
+	return (_engine != NULL && AGWebEngineCanGoBack((AGWebEngine *)_engine)) ? YES : NO;
+}
+
+- (void)goBack
+{
+	if (_engine != NULL) {
+		AGWebEngineGoBack((AGWebEngine *)_engine);
+	}
+}
+
+- (BOOL)canGoForward
+{
+	return (_engine != NULL && AGWebEngineCanGoForward((AGWebEngine *)_engine)) ? YES : NO;
+}
+
+- (void)goForward
+{
+	if (_engine != NULL) {
+		AGWebEngineGoForward((AGWebEngine *)_engine);
+	}
+}
+
 - (double)estimatedProgress
 {
 	if (_engine == NULL) {

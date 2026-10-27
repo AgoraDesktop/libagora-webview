@@ -171,6 +171,17 @@ const char *AGWebEngineURI(AGWebEngine *engine);
 const char *AGWebEngineTitle(AGWebEngine *engine);
 double AGWebEngineProgress(AGWebEngine *engine);
 
+/* **HISTORY, WHICH IS WHAT A BACK BUTTON IS MADE OF.** WebKit keeps a back/forward list that `AGWebEngineLoadURI` appends
+ * to, so these four doors are all a browser chrome needs: two questions and two commands. "Can" is asked SEPARATELY from
+ * doing it because a button has to be greyed out rather than do nothing — `GoBack` on an empty history is a no-op that
+ * leaves a person pressing a dead button, which reads as a bug in the app rather than as the end of the history.
+ *
+ * The answers are WebKit's own (`webkit_web_view_can_go_back` and its forward twin); nothing is remembered here. */
+int AGWebEngineCanGoBack(AGWebEngine *engine);
+void AGWebEngineGoBack(AGWebEngine *engine);
+int AGWebEngineCanGoForward(AGWebEngine *engine);
+void AGWebEngineGoForward(AGWebEngine *engine);
+
 /* ================================================================================================================
  * INPUT — THE OTHER HALF OF BEING A VIEW
  *

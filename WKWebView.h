@@ -125,6 +125,13 @@ NS_ASSUME_NONNULL_BEGIN
  * [0, 1], and whether a load is in flight. All of them answer something sensible before the first load. */
 - (nullable NSString *)title;
 - (nullable NSURL *)URL;
+/* **HISTORY, WHICH IS WHAT A BACK BUTTON IS MADE OF.** The engine keeps WebKit's own list; these four are the whole of
+ * what a browser chrome needs, and "can" is asked separately from doing it so a button can be greyed out rather than
+ * pressed into a no-op. */
+- (BOOL)canGoBack;
+- (void)goBack;
+- (BOOL)canGoForward;
+- (void)goForward;
 - (double)estimatedProgress;
 - (BOOL)isLoading;
 
