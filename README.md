@@ -18,6 +18,7 @@ AGWebEngineDraw(engine, dst, stride, w, h)             → the newest frame, in 
 AGWebEngineSetSize                                     → a viewport change, which the page relayouts for
 AGWebEngineURI / Title / Progress                      → what is loaded
 AGWebEnginePointerMotion / PointerButton / Key         → input, in the engine's device pixels
+AGWebEngineScroll                                      → one axis of one gesture, sign already flipped
 AGWebEngineDestroy                                     → and see "Teardown", below
 ```
 
@@ -70,13 +71,18 @@ measured rather than assumed, and both are in `AGWebEngine-WPE.c` where they bit
   `mousemove` and a `mousedown`, the second produced the `click`. A view in an untouched window therefore sends one click
   to take the focus, exactly as a person does.
 
-**There is no wheel door, deliberately.** It was implemented and removed: `wpe_view_backend_dispatch_axis_event` in both
-of WPE's wire forms (the 1-D event and the 2-D `motion_smooth | mask_2d`), on axes 0, 1, `REL_WHEEL` 8 and `REL_HWHEEL`
-6, at magnitudes from 15 to 75 000, both directions, against a 1400-point document and against a `div` with
-`overflow:auto`, with the pointer inside and the page focused — **no combination moved a pixel**. Keys, motion and
-buttons arrive through the same input client, so the gap is specific to the axis path. The next experiment is an
-EGL-export host, where WebKit's asynchronous scrolling lives; the matrix is recorded in `AGWebEngine-WPE.c` so nobody
-repeats it.
+**The wheel works, and it took three measurements to say so** — the first two of which were wrong:
+
+- **WPE's positive axis value means "scroll up".** The seam's `delta` is `wl_pointer.axis`'s, where positive means down,
+  so the host negates on the way through. A page listening for `wheel` says which way is which: with a listener writing
+  `e.deltaY` into `document.title`, sending `+15` reached the page as **`deltaY = -15`**. Passing the sign through would
+  scroll every document backwards — a bug a person reports as "it feels inverted" and nobody can reproduce.
+- **AND THE FIRST TWO TESTS PROVED NOTHING, WHICH IS WORTH RECORDING.** The wheel was "broken" for an hour because the
+  probe sampled the middle of a 100-point colour band: 60 points of scroll stayed inside it, so a working wheel looked
+  dead. The replacement (a 24-point marker) then gave two false negatives of its own — the document could not scroll far
+  enough to reveal it, and then the scroll went past it. What is in the test now is a **200-point band 200 points below
+  the fold**, which is on screen for any scroll between 80 and 280: the claim is "the document moved", and the assertion
+  is sized to the gesture rather than to an imagined one.
 
 ## Tests
 
@@ -84,7 +90,7 @@ repeats it.
 |---|---|---|
 | `webengine-page` | a real page — red strip above, blue body below — reaches the glass: the **composited screenshot** is asserted, along with all three load stages, the title, and two drawn frames (the first is the blank page) | `window-server` built (else SKIP 77) |
 | `webengine-teardown` | two engines can be made and dropped in one process — the lifetime a real application has on `-terminate:` | nothing |
-| `webengine-input` | the page hears the pointer (`:hover`), the button (an inline style set by the page's own script) and the keys (a `keydown` listener with no field focused) — each asserted as a colour in the engine's own frame | nothing |
+| `webengine-input` | the page hears the pointer (`:hover`), the button (an inline style set by the page's own script), the keys (a `keydown` listener with no field focused) and the wheel (a band below the fold comes into view) — each asserted as a colour in the engine's own frame | nothing |
 
 ```sh
 /usr/bin/clang-19 cmake -S . -B build -DCMAKE_C_COMPILER=/usr/bin/clang-19 \
@@ -100,11 +106,10 @@ by name.
 1. **A `WKWebView`-shaped class** (`NSView` in this component, drawing `AGWebEngineDraw`'s pixels through a `CGImage`,
    driven by the AppKit's run loop calling `AGWebEngineIterate`, forwarding `AGEvent`s through the input doors scaled by
    the buffer scale). The drawing half is the small half; the run-loop integration is the interesting one.
-2. **The wheel**, which needs the EGL-export host experiment described above before it can have a door.
-3. **Resize under load** and the scale factor (`wpe_view_backend_dispatch_set_device_scale_factor`), so a fractional
+2. **Resize under load** and the scale factor (`wpe_view_backend_dispatch_set_device_scale_factor`), so a fractional
    Agora output renders pages at its own device pixels.
-4. **The EGL export path**, for a caller that composites on the GPU: the same seam, `AGGLTextureFromImage` instead of a
-   memcpy — and the place the wheel is most likely to start working.
+3. **The EGL export path**, for a caller that composites on the GPU: the same seam, `AGGLTextureFromImage` instead of a
+   memcpy.
 
 ## Licence
 

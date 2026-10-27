@@ -37,6 +37,7 @@
 #define COLOUR_CLICKED 0x00FFFF00u
 #define COLOUR_KEY_BASE 0x00400020u
 #define COLOUR_KEYED 0x00FF0000u
+#define COLOUR_MARKER 0x0000FFFFu
 
 #define XKB_KEY_a 0x0061u
 #define EVDEV_KEY_A 38u
@@ -138,6 +139,23 @@ static int expect_colour(struct App *app, int x, int y, uint32_t want, const cha
 	return 0;
 }
 
+static int has_colour(struct App *app, uint32_t colour)
+{
+	int width = 0;
+	int height = 0;
+	int x, y;
+
+	AGWebEngineFrameSize(app->engine, &width, &height);
+	for (y = 0; y < height; y++) {
+		for (x = 0; x < width; x++) {
+			if (sample(app, x, y) == colour) {
+				return 1;
+			}
+		}
+	}
+	return 0;
+}
+
 int main(void)
 {
 	static const char *page =
@@ -146,8 +164,11 @@ int main(void)
 		"  #hover { height:40px; background:#002040; }"
 		"  #hover:hover { background:#00c000; }"
 		"  #key { height:40px; background:#400020; }"
+		"  #spacer { height:200px; background:#101010; }"
+		"  #marker { height:200px; background:#00ffff; }"
 			"</style></head><body>"
-		"<div id=hover></div><div id=key></div>"
+		"<div id=hover></div><div id=key></div><div id=spacer></div><div id=marker></div>"
+		"<div style='height:400px;background:#101010'></div>"
 		"<script>"
 		"document.getElementById('hover').addEventListener('click', function (e) {"
 		"  e.target.style.background = '#ffff00'; });"
@@ -193,6 +214,10 @@ int main(void)
 
 	failures += !expect_colour(&app, HOVER_X, HOVER_Y, COLOUR_HOVER_BASE, "the hover strip before input", 1000);
 	failures += !expect_colour(&app, KEY_X, KEY_Y, COLOUR_KEY_BASE, "the key strip before input", 1000);
+	if (has_colour(&app, COLOUR_MARKER)) {
+		fprintf(stderr, "input: the scroll marker is visible before any scroll\n");
+		failures++;
+	}
 
 	/* 1. THE POINTER, WHICH IS A CSS HIT TEST. */
 	AGWebEnginePointerMotion(app.engine, HOVER_X, HOVER_Y, 0, (uint32_t)now_ms());
@@ -233,12 +258,49 @@ int main(void)
 	}
 	AGWebEngineKey(app.engine, XKB_KEY_a, EVDEV_KEY_A, 0, 0, (uint32_t)now_ms());
 
+	/* 4. THE WHEEL. **THE MARKER IS THE ASSERTION, NOT A BAND OF COLOUR**: it starts 200 points down — immediately
+	 * below the fold — so three gestures of 60 bring it into view, and a scroll that is delivered but not applied leaves
+	 * it out of sight. MEASURED the hard way: the first version of this check sampled the middle of a 100-point band and
+	 * "proved" that scrolling did nothing for an hour, while the document had been scrolling all along. */
+	{
+		int notch;
+		int seen = 0;
+		int started;
+
+		for (notch = 0; notch < 4; notch++) {
+			AGWebEngineScroll(app.engine, HOVER_X, HOVER_Y, 0 /* AGAxisVertical */, 60.0, 0, 0,
+					  (uint32_t)now_ms());
+			AGWebEngineIterate(app.engine);
+			nap(200);
+		}
+		/* **WHERE THE MARKER IS DOES NOT MATTER; THAT IT IS VISIBLE DOES.** WebKit's scroll is smooth, so the exact
+		 * distance four gestures produce depends on how they overlap — MEASURED, and the reason this assertion is
+		 * "the band is on screen at all" rather than "the band is at y = 30": a first attempt with a 24-point mark gave
+		 * two false negatives, one because the document could not scroll far enough to show it and one because the
+		 * scroll went past it. A band that is on screen for a 200-point range asks the question that matters. */
+		started = now_ms();
+		while (now_ms() - started < 4000) {
+			AGWebEngineIterate(app.engine);
+			if (has_colour(&app, COLOUR_MARKER)) {
+				seen = 1;
+				break;
+			}
+			nap(5);
+		}
+		if (seen) {
+			printf("input: scroll ok\n");
+		} else {
+			fprintf(stderr, "input: the scroll marker never came into view\n");
+			failures++;
+		}
+	}
+
 	free(app.frame);
 	AGWebEngineDestroy(app.engine);
 	if (failures != 0) {
 		fprintf(stderr, "input: %d check(s) failed\n", failures);
 		return 1;
 	}
-	printf("input: ok — the page heard the pointer, the button and the keys\n");
+	printf("input: ok — the page heard the pointer, the button, the keys and the wheel\n");
 	return 0;
 }

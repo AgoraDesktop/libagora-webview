@@ -116,13 +116,13 @@ void AGWebEnginePointerMotion(AGWebEngine *engine, int x, int y, uint32_t modifi
 void AGWebEnginePointerButton(AGWebEngine *engine, int x, int y, uint32_t button, int pressed, uint32_t modifiers,
 			      uint32_t time_ms);
 
-/* **THERE IS NO WHEEL DOOR YET, AND THE REASON IS A MEASUREMENT RATHER THAN AN OMISSION.** It was implemented and
- * tested: `wpe_view_backend_dispatch_axis_event` in both of WPE's wire forms, on every axis number, at magnitudes from
- * one notch to five thousand pixels, against a long document and against a `div` with `overflow:auto`, with the pointer
- * inside and the page focused — and not one combination moved a pixel. Keys, pointer motion and buttons all arrive
- * through the same input client, so what is missing is specific to the axis path, and a door that provably does nothing
- * is worse than a note saying so. See `AGWebEngine-WPE.c` for the full matrix; the next experiment is an EGL-export host,
- * where WebKit's asynchronous scrolling lives. */
+/* **ONE AXIS OF ONE GESTURE**, in the AppKit's units: `delta` is the precise distance in the compositor's where one
+ * wheel notch is 15.0 — positive meaning "scroll down", as `wl_pointer.axis` and `AGEvent.delta` both mean it — and
+ * `value120` is the same motion in hundred-and-twentieths for a device that has steps and no precise distance (0 when
+ * it has neither). `axis` is `AGAxisVertical` or `AGAxisHorizontal`. The seam flips the sign on its way to WebKit,
+ * because WPE's positive value means "scroll up"; see `AGWebEngine-WPE.c`. */
+void AGWebEngineScroll(AGWebEngine *engine, int x, int y, uint32_t axis, double delta, int32_t value120,
+		       uint32_t modifiers, uint32_t time_ms);
 
 /* **A KEY, AS THE PAGE WILL SEE IT.** `keysym` is xkb's `XKB_KEY_…` and what the page's `key` is derived from;
  * `hardware_keycode` is the evdev code (`AGEvent.keycode`) and what WebKit hands the page as `keyCode`/`code`; both are

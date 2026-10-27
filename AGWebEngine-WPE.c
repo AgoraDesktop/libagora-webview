@@ -273,17 +273,39 @@ void AGWebEnginePointerButton(AGWebEngine *engine, int x, int y, uint32_t button
 	wpe_view_backend_dispatch_pointer_event(engine->backend, &event);
 }
 
-/* **THERE IS NO SCROLL DOOR HERE, AND THIS IS WHY.** The wheel was implemented, tested and removed rather than shipped
- * unproven. MEASURED on WPE WebKit 2.48 with this shm host, against a 1400-point document and against a `div` with
- * `overflow:auto`, with the pointer inside and the page focused: `wpe_view_backend_dispatch_axis_event` in BOTH wire
- * forms (`wpe_input_axis_event` and the 2-D `wpe_input_axis_2d_event` with `motion_smooth | mask_2d`), at axes 0, 1,
- * `REL_WHEEL` 8 and `REL_HWHEEL` 6, at magnitudes from 15 to 75000, in both directions — not one combination moved a
- * pixel. Keys, pointer motion and buttons all reach the page through the same input client, so this is specific to the
- * axis path and not to the host's loop.
- *
- * The next thing to try is an EGL-export host: WebKit's asynchronous scrolling lives in the compositor, and the shm
- * export may simply not have the renderer's scroll path behind it. That is an experiment with a number attached, and it
- * belongs in this file when it has been made rather than as a door that does nothing. */
+void AGWebEngineScroll(AGWebEngine *engine, int x, int y, uint32_t axis, double delta, int32_t value120,
+		       uint32_t modifiers, uint32_t time_ms)
+{
+	struct wpe_input_axis_2d_event event;
+	double distance = delta != 0.0 ? delta : (double)value120 * 15.0 / 120.0;
+
+	if (engine == NULL || engine->backend == NULL) {
+		return;
+	}
+	memset(&event, 0, sizeof event);
+	/* **THE SIGN FLIPS, AND THAT IS A MEASUREMENT WITH A PAGE'S OWN EARS ON IT.** The AppKit's `delta` is Wayland's
+	 * `wl_pointer.axis` value, where positive means "scroll down"; WPE's is the opposite, and a page listening for
+	 * `wheel` says so directly — MEASURED, with a listener writing `e.deltaY` into the document title: sending +15
+	 * reached the page as `deltaY = -15`. A host that passed the sign through would scroll every document the wrong
+	 * way, which is the sort of bug a person reports as "it feels inverted" and nobody can reproduce.
+	 *
+	 * **AND THE 2-D FORM IS THE ONE THIS HOST USES.** `wpe_input_axis_event` delivers too, but the smooth 2-D pair is
+	 * what a scrolling gesture is in WPE's own vocabulary, and a two-axis trackpad gesture has nowhere to go in the
+	 * one-axis struct. `value120` is only the discrete count, so a caller with steps and no precise distance gets them
+	 * turned back into the AppKit's unit here. */
+	event.base.type = (enum wpe_input_axis_event_type)(wpe_input_axis_event_type_motion_smooth |
+							  wpe_input_axis_event_type_mask_2d);
+	event.base.time = time_ms;
+	event.base.x = x;
+	event.base.y = y;
+	event.base.modifiers = ag_web_modifiers(modifiers);
+	if (axis == AGAxisHorizontal) {
+		event.x_axis = -distance;
+	} else {
+		event.y_axis = -distance;
+	}
+	wpe_view_backend_dispatch_axis_event(engine->backend, &event.base);
+}
 
 void AGWebEngineKey(AGWebEngine *engine, uint32_t keysym, uint32_t hardware_keycode, uint32_t modifiers, int pressed,
 		    uint32_t time_ms)
