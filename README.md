@@ -87,31 +87,27 @@ AGWindowEndFrame(window);                            /* the compositor samples i
 /* or, when no frame arrived: AGWindowCancelFrame(window); */
 ```
 
-**AND A WINDOW'S BUFFER NOW WORKS TOO, AS FAR AS CHANNELS.** MEASURED, in three steps:
+**AND A WINDOW'S BUFFER WORKS TOO — GPU TO GLASS.** MEASURED, in four steps, each one a change somewhere:
 
 1. A window's GPU buffer allocated through **GBM** cannot be rendered into at all: `glEGLImageTargetTexture2DOES` answers
-   `GL_INVALID_OPERATION` for it, on the same device, in the same context. The seam now allocates those buffers through
-   **EGL** instead (`AGGLTextureAllocate` + `EGL_MESA_image_dma_buf_export`), which imports and renders perfectly — the
-   difference is the ALLOCATOR, not the device, and the seam keeps GBM as the fallback.
-2. Both of a window's slots are allocated **together**, at the resize: this machine's EGL refuses to export a second
-   texture once the first buffer is being imported and rendered into elsewhere, so a lazily-made second slot fell back to
-   GBM and the whole path collapsed.
-3. The composition then runs — `webengine-window` commits its frames and the page's shape is on the glass — but **red and
-   blue are exchanged**: the page's `#ff0000` arrives as `(0,0,255)` and its `#0000c0` as `(192,0,0)`. The buffer exports
-   as **AB24** (RGBA in memory, which is what GL writes) and the compositor reads those bytes the other way round. That is
-   the open question, and the test SKIPS with that sentence rather than passing on a wrong picture.
+   `GL_INVALID_OPERATION` on the same device, in the same context. The seam now allocates those buffers through **EGL**
+   (`AGGLTextureAllocate` + `EGL_MESA_image_dma_buf_export`), which imports and renders perfectly — the difference is the
+   ALLOCATOR, not the device — and keeps GBM as the fallback.
+2. Both of a window's slots are allocated **together**, at the resize: this driver refuses to export a second texture once
+   the first buffer is being imported and rendered into elsewhere, so a lazily-made second slot fell back to GBM and the
+   path collapsed.
+3. A frame that arrives in a turn where the host has no free buffer is **kept** and flushed into the next one
+   (`AGWebEngineSetPresentDMABUF` composites a pending frame; WebKit does not wait for the host's buffer).
+4. **The last one was in the compositor**, and it looked like our bug: the page arrived with red and blue exchanged. The GL
+   renderer uploads shared-memory surfaces from `ARGB8888` bytes and swaps `.bgr` in the shader to put red back — and it
+   applied the same shader to a dma-buf, which EGL has ALREADY mapped onto GL's channels. The shader now takes the channel
+   order as a uniform (`u_bgr`), set from how the texture was made: 1 for an upload, 0 for an import. The page is red
+   above and blue below, which is what `webengine-window` asserts on the composited screenshot.
 
-**MEASURED, AND IT STOPS SHORT OF THE WINDOW ON THIS MACHINE.** A destination this seam exported from its own EGL imports
-and composites perfectly — `webengine-gpu` asserts the page's red band at the top of that buffer, read back by the TEST and
-not by the engine (which is refused pixels of its own, so a pass cannot come from a hidden readback). A **window's** buffer
-does not: `glEGLImageTargetTexture2DOES` answers `GL_INVALID_OPERATION` for a buffer allocated through GBM, so the
-whole-window path SKIPS here with that sentence rather than pretending. Two differences were ruled out on the way: the
-context was moved onto the window's own GBM device (`AGGLContextCreateWithGBM`), and the engine now says WHICH step failed
-with the numbers it used — an import that fails is otherwise a frame that never arrives, which looks exactly like a page
-that stopped painting.
-
-The next thing to try is allocating the window's buffer from the *EGL* device rather than from GBM (`EGL_MESA_image_dma_buf_export`
-into a `zwp_linux_dmabuf` buffer), which is the arrangement that is known to work here.
+A destination this seam exports from its own EGL composites perfectly — `webengine-gpu` asserts the page's red band at the
+top of that buffer, read back by the TEST and not by the engine (which is refused pixels of its own, so a pass cannot come
+from a hidden readback). A window's buffer needed all four steps above; with them, `webengine-window` — nested, opt-in,
+asserted on the composited screenshot — passes too.
 
 ## Partial damage
 
@@ -187,7 +183,7 @@ measured rather than assumed, and both are in `AGWebEngine-WPE.c` where they bit
 | `webengine-teardown` | two engines can be made and dropped in one process — the lifetime a real application has on `-terminate:` | nothing |
 | `appkit-webview` | the CLASS, offscreen: the page arrives **upright** (the rep's own orientation is measured first), the title is the page's, and the pointer and the wheel reach the page through the view's own y-flip and scale | nothing |
 | `webengine-gpu` | the **present mode**: the page composited into a GPU buffer with no readback — the destination is read back by the test, and the engine is asserted to have no pixels of its own | EGL |
-| `webengine-window` | the same, into a real **window's** own buffer, asserted on the composited screenshot — nested and opt-in (`AGORA_ALLOW_NESTED=1`), and SKIPS where the machine will not bind a GBM buffer as a texture | EGL + a compositor that imports dma-buf |
+| `webengine-window` | the same, into a real **window's** own buffer, asserted on the composited screenshot — nested and opt-in (`AGORA_ALLOW_NESTED=1`) | EGL + a compositor that imports dma-buf |
 | `webengine-egl` | the same page through the **EGL export**: imported, blitted flipped, read back — asserted as a red band at the top and blue below, because a flipped blit or a channel swap is a frame that is not the page. SKIPS when the machine's EGL cannot import a dma-buf | EGL |
 | `webengine-input` | the page hears the pointer (`:hover`), the button (an inline style set by the page's own script), the keys (a `keydown` listener with no field focused) and the wheel (a band below the fold comes into view) — each asserted as a colour in the engine's own frame | nothing |
 
@@ -204,9 +200,7 @@ by name.
 
 1. **Resize under load** and the scale factor (`wpe_view_backend_dispatch_set_device_scale_factor`), so a fractional
    Agora output renders pages at its own device pixels.
-2. **A window buffer the EGL device can import**, which is what the whole-window presenter needs and does not have on this
-   machine: allocate through EGL rather than GBM.
-3. **Input in the present mode** — nothing about it is mode-specific, but nothing has asserted it either.
+2. **Input in the present mode** — nothing about it is mode-specific, but nothing has asserted it either.
 
 ## Licence
 

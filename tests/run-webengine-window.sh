@@ -136,16 +136,13 @@ for name, got, want in checks:
         print(f'FAIL: {name} is {got} in the composited frame, want {want}', file=sys.stderr)
         failed = True
 if failed:
-    # **RED AND BLUE EXCHANGED IS A CHANNEL-ORDER QUESTION, NOT A MISSING FRAME.** The composition runs (the frames are
-    # committed and the page's SHAPE is right — a red band above a blue body, with the swap applied), so what this run
-    # found is that this machine's GL writes the buffer as RGBA while the compositor reads those same bytes as BGRA.
-    # Recorded as a SKIP with the finding rather than a pass over a wrong picture or a failure that blames the wrong
-    # component; the numbers are in the README.
-    # The page's red (255,0,0) arriving as (0,0,255) and its blue (0,0,192) as (192,0,0) IS the swap, and nothing else
-    # produces both at once.
+    # **RED AND BLUE EXCHANGED IS NAMED, BECAUSE IT LOOKS LIKE A LOST FRAME AND IS NOT.** It used to be the compositor
+    # swapping a dma-buf it had not uploaded (fixed with `u_bgr`); if it comes back, the message says so instead of
+    # "the page is not there".
     if at_window(300, 12) == (0, 0, 255) and at_window(300, 150) == (192, 0, 0):
-        print('SKIP: the page arrived with red and blue exchanged — the buffer is RGBA and the compositor reads BGRA')
-        sys.exit(77)
+        print('FAIL: the page arrived with red and blue exchanged — the compositor is swapping an EGL-mapped buffer',
+              file=sys.stderr)
+        sys.exit(1)
     print(f'      (the screenshot is {path})', file=sys.stderr)
     sys.exit(1)
 print('ok: the composited frame carries the page — red above, blue below')
