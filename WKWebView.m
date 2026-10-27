@@ -734,11 +734,28 @@ static void ag_view_title_changed(void *context, AGWebEngine *engine, const char
 
 - (void)mouseDown:(NSEvent *)event
 {
+	NSPoint point = [self ag_enginePointForEvent:event];
+
+	_drag_last_x = point.x;
+	_drag_last_y = point.y;
+	_drag_extending = NO;
+	_last_drag_extend_ms = 0.0;
 	[self ag_sendButton:0x110u pressed:YES withEvent:event];
 }
 
 - (void)mouseUp:(NSEvent *)event
 {
+	if (_drag_extending && _engine != NULL) {
+		/* **THE RELEASE THAT ENDS THE DRAG, AND IT IS A SHIFT ONE.** The drag's extension is a shift-press per step and no
+		 * release until here, so this balances it — a release in the middle would turn each step into a CLICK, and three
+		 * clicks at nearly one place are a paragraph selection. */
+		NSPoint point = [self ag_enginePointForEvent:event];
+
+		_drag_extending = NO;
+		AGWebEnginePointerButton((AGWebEngine *)_engine, (int)(point.x + 0.5), (int)(point.y + 0.5), 0x110u, 0,
+					 AGModifierShift, [self ag_timeForEvent:event]);
+		return;
+	}
 	[self ag_sendButton:0x110u pressed:NO withEvent:event];
 }
 
@@ -773,18 +790,29 @@ static void ag_view_title_changed(void *context, AGWebEngine *engine, const char
 		return;
 	}
 	now = ag_now_ms();
-	if (now - _last_drag_extend_ms < 30.0) {
+	if (now - _last_drag_extend_ms < 16.0) {
 		return;			/* a drag is 60 events a second; the page needs a few */
 	}
-	_last_drag_extend_ms = now;
 	point = [self ag_enginePointForEvent:event];
+	/* **SIX POINTS OF TRAVEL BEFORE ANOTHER PRESS, AND THAT IS THE WHOLE DIFFERENCE BETWEEN A SELECTION AND A PARAGRAPH.**
+	 * WebKit counts presses as multi-clicks by TIME and DISTANCE: a drag's first few events move one or two pixels, so a
+	 * press per event made a double click (the word) and then a triple (the whole paragraph) — MEASURED as 263 characters
+	 * selected where the drag itself covered about 30. A press is now only sent once the pointer has really moved. */
+	{
+		CGFloat scale = (_scale > 0.0) ? _scale : 1.0;
+		CGFloat min_travel = 6.0 * scale;
+		CGFloat dx = point.x - _drag_last_x;
+		CGFloat dy = point.y - _drag_last_y;
+
+		if (dx * dx + dy * dy < min_travel * min_travel) {
+			return;
+		}
+	}
+	_last_drag_extend_ms = now;
+	_drag_last_x = point.x;
+	_drag_last_y = point.y;
+	_drag_extending = YES;
 	AGWebEnginePointerButton((AGWebEngine *)_engine, (int)(point.x + 0.5), (int)(point.y + 0.5), 0x110u, 1,
-				 AGModifierShift, [self ag_timeForEvent:event]);
-	/* **THE PAIR IS SEPARATED BY A TURN OF THE ENGINE, NOT JUST BY TWO CALLS.** WebKit handles a press and a release that
-	 * arrive in one pass as a click whose selection is decided once; MEASURED, back-to-back dispatches selected nothing
-	 * where the same pair with an iterate between them selected 47 characters. */
-	AGWebEngineIterate((AGWebEngine *)_engine);
-	AGWebEnginePointerButton((AGWebEngine *)_engine, (int)(point.x + 0.5), (int)(point.y + 0.5), 0x110u, 0,
 				 AGModifierShift, [self ag_timeForEvent:event]);
 }
 

@@ -276,6 +276,11 @@ it was measured with a page that reports its own selection:
   second, a shift-click at the new point. The risk was links — a shift-click on a link opens one in some browsers — and it
   was measured: neither a shift-click nor a plain click navigates in this engine yet, because no navigation policy is
   installed. When policy handling arrives, that comment is where to revisit it.
+- **The first version was too aggressive**: dragging over a word selected the *whole paragraph*. WebKit counts presses as
+  multi-clicks by time AND distance, and a drag's first events move one or two pixels — so a press per event made a double
+  click (the word) and then a triple (the paragraph). MEASURED: presses 1-3 pixels apart selected **263** characters where
+  the same drag with six points between presses selected **30**. A shift-press is now only sent once the pointer has really
+  moved (six points), and the release comes once at mouse-up, so the steps cannot become clicks.
 - And the button numbers themselves were **wrong**: WPE's enum is 1 = LEFT, **2 = RIGHT, 3 = MIDDLE** (every other value
   arrives as LEFT), where this seam had middle and right swapped. Found by sending each number to a page that prints
   `MouseEvent.button`; fixed, with the numbers in the comment.

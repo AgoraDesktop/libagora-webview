@@ -337,7 +337,12 @@ int main(void)
 		}
 		printf("appkit_webview: the drag selected %d character(s) — title \"%s\"\n", selected,
 		       [[view title] UTF8String] ?: "");
-		check(selected > 0, "a pointer drag selected text (emulated as shift-clicks from the anchor)");
+		/* **A SPAN, NOT THE PARAGRAPH.** The prose is 74 characters and the drag covers about two thirds of one line, so a
+		 * correct selection is a few dozen characters. MEASURED, the first implementation selected the WHOLE PARAGRAPH —
+		 * presses one or two pixels apart counted as a triple click — and a test that only asked "is anything selected"
+		 * passed it. */
+		check(selected > 0, "a pointer drag selected text (emulated as shift-presses from the anchor)");
+		check(selected < 60, "and it selected the span that was dragged over, not the whole paragraph");
 	}
 
 	/* 3. THE WHEEL, IN APPKIT'S SIGN. `deltaY` is positive when a person scrolls UP, and the cyan band begins 280 points
