@@ -1,0 +1,26 @@
+# Build directory: every build artefact goes here
+/build/
+
+# Compiled objects and libraries
+*.o
+*.lo
+*.a
+*.so
+*.so.*
+*.dylib
+*.dll
+
+# Editor / OS noise
+.DS_Store
+*.swp
+*~
+
+# External window-chrome themes, read at runtime and NOT part of this library. A theme is somebody else's work
+# under somebody else's licence (the one this was built against is GPL), so it must never be committed; the
+# mechanism is documented in the README and the MIT fixture used by the tests lives in tests/fixtures/chrome.
+/themes/
+/resources/
+
+# Python bytecode, which the ledger tools must never be committed with.
+__pycache__/
+*.pyc

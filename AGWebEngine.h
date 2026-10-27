@@ -1,0 +1,108 @@
+/*
+ * AGWebEngine.h — a web page as pixels, which is the whole of what a WebView class can be built on.
+ *
+ * Copyright © 2026 Kyle J. Cardoza.
+ * SPDX-FileCopyrightText: 2026 Kyle J. Cardoza
+ * SPDX-License-Identifier: LGPL-3.0-or-later
+ *
+ * WHY A SEAM AND NOT A CLASS. Agora's AppKit draws with the CPU into a `0x00RRGGBB` buffer, so a web view is a
+ * rectangle of pixels and an engine that produces them — and which engine is a decision this header does not make. It
+ * says what a page IS (a size, a load, a title, a progress, damage, and pixels to draw) and nothing about WebKit,
+ * because the day there is a second engine — Servo, or a document renderer for `text/html` that is not a browser —
+ * the AppKit must not have to know.
+ *
+ * **THE PIXELS ARE THE CONTRACT, AND THEY ARE THE WINDOW SEAM'S OWN FORMAT.** `AGWebEngineDraw` writes `0x00RRGGBB`
+ * rows, top-down, exactly as `AGWindowBeginFrame` hands them over and exactly as a `CGImage` is made from. A caller
+ * therefore has no conversion to make and no orientation to get wrong: present it into a window, or wrap it and draw it
+ * in `-drawRect:`, and both are the same memory.
+ *
+ * **THE ENGINE OWNS A MAIN LOOP AND THE CALLER MUST PUMP IT.** WPE WebKit is GLib: its loads complete, its frames
+ * arrive and its process supervision all run on the default `GMainContext`, so an application whose loop is its own
+ * must call `AGWebEngineIterate` from it — once a turn is enough, and it never blocks. That is the same shape the
+ * window seam already has (`AGWindowServerDispatch`), which is why the AppKit's run loop can drive both and a headless
+ * test needs nothing else.
+ *
+ * THE IMPLEMENTATION THAT EXISTS IS WPE WEBKIT, over `libwpe` + `libwpebackend-fdo`, taking frames through the FDO
+ * backend's SHARED-MEMORY export — `wl_shm` pixels with no GPU involved, which is the path a CPU-drawn AppKit wants and
+ * the one that works without EGL. Its EGL export gives the same picture as an `EGLImage` for a GPU caller; that is
+ * measured (`AGGL` imports it) and is not this door's default.
+ *
+ * THREADING. One engine, one thread: the engine is created, iterated, drawn and destroyed on the thread whose GLib
+ * context it runs on. WebKit's own processes are its business.
+ */
+
+#ifndef AG_WEB_ENGINE_H
+#define AG_WEB_ENGINE_H
+
+#include <stdint.h>
+
+#ifdef __cplusplus
+extern "C" {
+#endif
+
+typedef struct AGWebEngine AGWebEngine;
+
+/* The load's stage, in WebKit's own terms and the era's: a page starts, may be redirected, is committed (the first
+ * content is in), and finishes. A caller that only wants "it is ready" watches for `AGWebLoadFinished`. */
+typedef enum {
+	AGWebLoadStarted = 0,
+	AGWebLoadRedirected = 1,
+	AGWebLoadCommitted = 2,
+	AGWebLoadFinished = 3
+} AGWebLoadStage;
+
+/* **EVERY CALLBACK IS OPTIONAL AND EVERY ONE COMES FROM `AGWebEngineIterate`.** `damaged` means "there are new pixels
+ * to draw" and is the only one a caller must act on; it is called once per engine frame, and a caller that ignores it
+ * simply draws the newest pixels whenever it next paints, which is correct but a frame late. */
+typedef struct AGWebEngineCallbacks {
+	void (*load_changed)(void *context, AGWebEngine *engine, AGWebLoadStage stage);
+	void (*title_changed)(void *context, AGWebEngine *engine, const char *title);
+	void (*damaged)(void *context, AGWebEngine *engine);
+} AGWebEngineCallbacks;
+
+/* Create an engine sized in DEVICE pixels, with nothing loaded (the page is blank white, which is what a browser shows).
+ * `callbacks` may be NULL and `context` is passed back untouched. Returns NULL when the machine cannot start the engine
+ * at all — no `libWPEBackend-fdo`, no WebKit — and the reason is printed to stderr, because a web view that silently
+ * never paints is worse than one that refuses. */
+AGWebEngine *AGWebEngineCreate(int width, int height, const AGWebEngineCallbacks *callbacks, void *context);
+void AGWebEngineDestroy(AGWebEngine *engine);
+
+/* **PUMP THE ENGINE, AND NEVER BLOCK.** Returns 1 when it did any work, 0 when there was nothing to do; a caller's loop
+ * calls it every turn either way. This is where loads complete and frames arrive. */
+int AGWebEngineIterate(AGWebEngine *engine);
+
+/* Load a URL (`http`, `https`, `file`, `data`) or a string of HTML. Both are asynchronous: the answer is the callbacks.
+ * The base URI may be NULL, and is what relative links and `about:blank` use. */
+void AGWebEngineLoadURI(AGWebEngine *engine, const char *uri);
+void AGWebEngineLoadHTML(AGWebEngine *engine, const char *html, const char *base_uri);
+
+/* **A RESIZE IS THE ENGINE'S TO RELAYOUT**, which is why it is a door and not a property: WebKit re-lays out the page
+ * for the new viewport and paints when it is ready, and a caller that only resized its own buffer would keep drawing
+ * the old layout stretched. Sizes are DEVICE pixels — `round(points * AGWindowServerScale(server))`, the number a
+ * window's buffer is. */
+void AGWebEngineSetSize(AGWebEngine *engine, int width, int height);
+
+/* What is loaded: the URL after any redirect, the title the page set, and WebKit's own estimate of the load's progress
+ * in [0, 1]. Any of the three may be NULL/0 before the first commit, which is a state and not an error. */
+const char *AGWebEngineURI(AGWebEngine *engine);
+const char *AGWebEngineTitle(AGWebEngine *engine);
+double AGWebEngineProgress(AGWebEngine *engine);
+
+/* The frame's size in device pixels, which is the size it was last asked to be — a caller's own buffer questions
+ * answered without guessing. */
+void AGWebEngineFrameSize(AGWebEngine *engine, int *width, int *height);
+
+/* **DRAW THE NEWEST FRAME INTO THE CALLER'S PIXELS.** `dst` is `0x00RRGGBB` with a TOP-DOWN origin and
+ * `dst_stride_bytes` between rows; the engine's frame lands at (0, 0) and is clipped to `width` x `height`. Returns 1
+ * when pixels were written, 0 when there is no frame yet (the engine was just made, or nothing has painted) — a caller
+ * that gets 0 leaves whatever was there, which is the blank page's white if it drew that first.
+ *
+ * Nothing is cleared and nothing is scaled: a caller that wants the page smaller than its frame crops it, and one that
+ * wants it at a different size asks the engine for that size. Scaling a rendered page is what a viewport is for. */
+int AGWebEngineDraw(AGWebEngine *engine, uint32_t *dst, int dst_stride_bytes, int width, int height);
+
+#ifdef __cplusplus
+}
+#endif
+
+#endif /* AG_WEB_ENGINE_H */

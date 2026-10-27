@@ -1,0 +1,20 @@
+# Copyright © 2026 Kyle J. Cardoza.
+# SPDX-FileCopyrightText: 2026 Kyle J. Cardoza
+# SPDX-License-Identifier: LGPL-3.0-or-later
+
+@PACKAGE_INIT@
+
+# Consume the web engine seam (libagora-webview).
+#
+# **IT NEEDS THE WINDOW SEAM AND NOT THE APPKIT YET.** The engine composites into a caller's pixels and knows nothing
+# about an NSView; the class that will draw them is the next tier. What it does need is `AGWindowServer.h`'s vocabulary
+# only through the caller, so the interface below is AgoraApp's (the pixels, the scale) plus WPE's three libraries,
+# which are SYSTEM libraries — linked dynamically, on the same terms as Wayland, xkbcommon and libcurl.
+
+include(CMakeFindDependencyMacro)
+
+find_dependency(AgoraApp CONFIG)
+
+include("${CMAKE_CURRENT_LIST_DIR}/AgoraWebViewTargets.cmake")
+
+check_required_components(AgoraWebView)

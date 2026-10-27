@@ -1,0 +1,38 @@
+# Licensing
+
+`libagora-app` is free software, licensed **per artifact**:
+
+| Artifact | Location | Licence |
+|---|---|---|
+| The library | every source file outside the directories listed below | **GNU Lesser General Public License, version 3 or later** |
+| Programs | `tests/` | **GNU General Public License, version 3 or later** |
+
+## Licence texts
+
+- `COPYING` — GNU General Public License, version 3.
+- `COPYING.LESSER` — GNU Lesser General Public License, version 3. This is the
+  *additional permissions* text that sits on top of `COPYING`; LGPL-3.0 is not a
+  standalone document, which is why both files are present.
+
+Both are verbatim copies of the canonical texts published by the Free Software
+Foundation at <https://www.gnu.org/licenses/>. Do not edit them.
+
+Every source file carries the SPDX identifier that applies to it:
+
+```
+SPDX-License-Identifier: LGPL-3.0-or-later   # library
+SPDX-License-Identifier: GPL-3.0-or-later    # programs
+```
+
+## Why version 3 and not 2.1
+
+Agora's stack links `libagora-core` and `libagora-dispatch`, which are Apache-2.0
+extractions of Apple's swift-corelibs. Apache-2.0 is compatible with GPL-3.0/LGPL-3.0
+only — it is incompatible with GPL-2.0 and LGPL-2.1. Version 3 is therefore the only
+copyleft the combined work can resolve as.
+
+## History
+
+Before 2026-10-22 this repository was MIT licensed. Every commit up to and including
+`74fdd36` remains available under those terms; no release was ever tagged. The change and
+its rationale are recorded in `LICENSE-CHANGE.md` in the Agora superproject.
