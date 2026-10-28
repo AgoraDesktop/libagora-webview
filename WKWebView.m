@@ -1094,6 +1094,14 @@ static BOOL ag_real_drag_enabled(void)
 	point = [self ag_enginePointForEvent:event];
 	dx = [event deltaX] * AGWebEnginePointsPerWheelLine;
 	dy = [event deltaY] * AGWebEnginePointsPerWheelLine;
+	/* **AND THE DISTANCE IS SAID OUT LOUD WHEN THE DIAGNOSTIC IS ON**, because this is the ONE hop a person can check
+	 * without a debugger: run the demo with `WK_WEBVIEW_DIAG=1`, turn the wheel once, and the line should read forty
+	 * points for a vertical notch. A line that never appears is a wheel that never reached the view; a line with the wrong
+	 * number is a unit that is not being converted. */
+	if (getenv("WK_WEBVIEW_DIAG") != NULL) {
+		fprintf(stderr, "  DIAG wheel: %.1f lines -> %.1f points at (%.0f,%.0f)\n", (double)[event deltaY],
+			(double)(-dy), (double)point.x, (double)point.y);
+	}
 	if (dy != 0.0) {
 		AGWebEngineScroll((AGWebEngine *)_engine, (int)(point.x + 0.5), (int)(point.y + 0.5), AGAxisVertical,
 				  (double)(-dy), 0, ag_view_modifiers([event modifierFlags]),
