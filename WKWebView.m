@@ -1072,9 +1072,16 @@ static BOOL ag_real_drag_enabled(void)
 	[self ag_refreshCursor];
 }
 
-/* **THE WHEEL, WITH ITS SIGN THE RIGHT WAY ROUND.** `NSEvent`'s `deltaY` is positive when the person scrolls UP (content
- * moves down); the seam's `delta` is `wl_pointer.axis`'s, positive when scrolling DOWN. So the sign flips here, exactly
- * once, and the other flips in this file are all about y. */
+/* **THE WHEEL, WITH ITS SIGN THE RIGHT WAY ROUND AND ITS UNIT CONVERTED ONCE.** `NSEvent`'s `deltaY` is positive when
+ * the person scrolls UP (content moves down) and it counts WHEEL LINES — 1.0 per notch, which is what the seam's pointer
+ * events become one layer down (`-[NSWindow cg_handleSeamEvent:]` divides the compositor's 15.0 by fifteen); the engine's
+ * `delta` is a distance in PAGE POINTS where positive means scroll DOWN. So this is where a line becomes forty points
+ * (`AGWebEnginePointsPerWheelLine`), and the sign flips here, exactly once.
+ *
+ * **THE CONVERSION IS THE WHOLE BUG THIS FIXES.** Passing the line count straight through made one notch scroll one
+ * point: the engine's own axis is in device pixels and WebKit divides by the device scale factor, so the same 1.0 was a
+ * fraction of a pixel over a fractional display. A page moved a pixel per click of the wheel, which a person reports as
+ * "scrolling is way too slow" — and it is a factor of forty, not a taste. */
 - (void)scrollWheel:(NSEvent *)event
 {
 	NSPoint point;
@@ -1085,8 +1092,8 @@ static BOOL ag_real_drag_enabled(void)
 		return;
 	}
 	point = [self ag_enginePointForEvent:event];
-	dx = [event deltaX];
-	dy = [event deltaY];
+	dx = [event deltaX] * AGWebEnginePointsPerWheelLine;
+	dy = [event deltaY] * AGWebEnginePointsPerWheelLine;
 	if (dy != 0.0) {
 		AGWebEngineScroll((AGWebEngine *)_engine, (int)(point.x + 0.5), (int)(point.y + 0.5), AGAxisVertical,
 				  (double)(-dy), 0, ag_view_modifiers([event modifierFlags]),

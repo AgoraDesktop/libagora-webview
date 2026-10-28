@@ -552,7 +552,18 @@ void AGWebEngineScroll(AGWebEngine *engine, int x, int y, uint32_t axis, double 
 		       uint32_t modifiers, uint32_t time_ms)
 {
 	struct wpe_input_axis_2d_event event;
-	double distance = delta != 0.0 ? delta : (double)value120 * 15.0 / 120.0;
+	/* **A CALLER WITH STEPS AND NO DISTANCE STILL GETS ONE LINE'S WORTH PER NOTCH.** `value120` is
+	 * hundred-and-twentieths of a notch, and a notch is `AGWebEnginePointsPerWheelLine` points — the same constant a
+	 * caller passing a distance already used, which is why it is a constant and not a second 40 written here. */
+	double distance = delta != 0.0 ? delta
+		: (double)value120 * AGWebEnginePointsPerWheelLine / 120.0;
+	/* **AND THE WIRE IS IN DEVICE PIXELS, WHICH IS THE ONE UNIT THIS SEAM DOES NOT SPEAK.** WebKit divides both the
+	 * position and the 2-D smooth axis by the device scale factor on its way to CSS pixels, so a distance in POINTS has
+	 * to be multiplied by it here — exactly as the caller multiplied a position, and for the same reason. Sending points
+	 * through unscaled made every wheel notch a fraction of the distance it should be at a fractional display: the
+	 * pointer landed in the wrong place for the SAME defect in the position, measured as a drag selecting the text above
+	 * where the person pressed (`AGWebEnginePointerMotion`). */
+	double pixels = distance * ((engine != NULL && engine->device_scale > 0.0) ? engine->device_scale : 1.0);
 
 	if (engine == NULL || engine->backend == NULL) {
 		return;
@@ -566,8 +577,8 @@ void AGWebEngineScroll(AGWebEngine *engine, int x, int y, uint32_t axis, double 
 	 *
 	 * **AND THE 2-D FORM IS THE ONE THIS HOST USES.** `wpe_input_axis_event` delivers too, but the smooth 2-D pair is
 	 * what a scrolling gesture is in WPE's own vocabulary, and a two-axis trackpad gesture has nowhere to go in the
-	 * one-axis struct. `value120` is only the discrete count, so a caller with steps and no precise distance gets them
-	 * turned back into the AppKit's unit here. */
+	 * one-axis struct. It is ALSO the only form that keeps the distance: the one-axis struct's `value` is read as a
+	 * TICK (±1), which WebKit multiplies by its line step — so a batch of three notches would arrive as one. */
 	event.base.type = (enum wpe_input_axis_event_type)(wpe_input_axis_event_type_motion_smooth |
 							  wpe_input_axis_event_type_mask_2d);
 	event.base.time = time_ms;
@@ -575,9 +586,9 @@ void AGWebEngineScroll(AGWebEngine *engine, int x, int y, uint32_t axis, double 
 	event.base.y = y;
 	event.base.modifiers = ag_web_modifiers(modifiers);
 	if (axis == AGAxisHorizontal) {
-		event.x_axis = -distance;
+		event.x_axis = -pixels;
 	} else {
-		event.y_axis = -distance;
+		event.y_axis = -pixels;
 	}
 	wpe_view_backend_dispatch_axis_event(engine->backend, &event.base);
 }

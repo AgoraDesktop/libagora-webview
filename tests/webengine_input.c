@@ -199,6 +199,11 @@ int main(void)
 		"  document.title = 'buttons=' + e.buttons + ' button=' + e.button; });"
 		"window.addEventListener('keydown', function () {"
 		"  document.getElementById('key').style.background = '#ff0000'; });"
+		/* **AND THE WHEEL REPORTS THE DISTANCE IT WAS GIVEN**, which is the only way a unit error in the axis door can be
+		 * seen from outside: a page that scrolls "the right way" says nothing about whether one notch moved one point or
+		 * forty. */
+		"window.addEventListener('wheel', function (e) {"
+		"  document.title = 'wheel dy=' + Math.round(e.deltaY); });"
 		"</script></body></html>";
 	static const AGWebEngineCallbacks callbacks = { on_load_changed, NULL, on_damaged };
 	struct App app;
@@ -331,6 +336,41 @@ int main(void)
 	}
 	AGWebEngineKey(app.engine, XKB_KEY_a, EVDEV_KEY_A, 0, 0, (uint32_t)now_ms());
 
+	/* 3a. **THE WHEEL'S UNIT, ASKED OF THE PAGE AND NOT OF THE SCROLL.** `AGWebEngineScroll`'s `delta` is a distance
+	 * in PAGE POINTS, so one line of wheel — `AGWebEnginePointsPerWheelLine`, the same forty points WebKit's own line
+	 * step is — has to arrive as forty, and two lines as eighty. A device with steps and no distance is given only
+	 * `value120`, and one notch (120) is the same forty: the fallback is a unit conversion, not a second opinion.
+	 *
+	 * MEASURED BEFORE THIS EXISTED, which is why it does: the door used to pass a caller's value through as device
+	 * pixels, so the AppKit's line count arrived as one PIXEL per notch and a page crawled. The colour checks below can
+	 * only say "something scrolled"; this one says how far. */
+	{
+		char want[64];
+
+		AGWebEngineScroll(app.engine, HOVER_X, HOVER_Y, 0 /* AGAxisVertical */, 0.0, 120, 0, (uint32_t)now_ms());
+		snprintf(want, sizeof want, "wheel dy=%d", (int)AGWebEnginePointsPerWheelLine);
+		if (wait_for_title(&app, want, 3000)) {
+			printf("input: one notch of steps (%d) reached the page as \"%s\"\n", 120,
+			       AGWebEngineTitle(app.engine) ?: "(no title)");
+		} else {
+			fprintf(stderr, "input: one notch of steps gave \"%s\", wanted %s\n",
+				AGWebEngineTitle(app.engine) ?: "(no title)", want);
+			failures++;
+		}
+
+		AGWebEngineScroll(app.engine, HOVER_X, HOVER_Y, 0 /* AGAxisVertical */,
+				  AGWebEnginePointsPerWheelLine * 2.0, 0, 0, (uint32_t)now_ms());
+		snprintf(want, sizeof want, "wheel dy=%d", (int)(AGWebEnginePointsPerWheelLine * 2.0));
+		if (wait_for_title(&app, want, 3000)) {
+			printf("input: two lines of distance reached the page as \"%s\"\n",
+			       AGWebEngineTitle(app.engine) ?: "(no title)");
+		} else {
+			fprintf(stderr, "input: two lines gave \"%s\", wanted %s\n",
+				AGWebEngineTitle(app.engine) ?: "(no title)", want);
+			failures++;
+		}
+	}
+
 	/* 4. THE WHEEL. **THE MARKER IS THE ASSERTION, NOT A BAND OF COLOUR**: it starts 200 points down — immediately
 	 * below the fold — so three gestures of 60 bring it into view, and a scroll that is delivered but not applied leaves
 	 * it out of sight. MEASURED the hard way: the first version of this check sampled the middle of a 100-point band and
@@ -366,6 +406,33 @@ int main(void)
 			fprintf(stderr, "input: the scroll marker never came into view\n");
 			failures++;
 		}
+	}
+
+	/* 5. **AND A POINT IS STILL A POINT WHEN IT IS TWO PIXELS.** The engine's axis is in DEVICE pixels and WebKit divides
+	 * by the device scale factor, so a host that sent points unscaled would scroll HALF as far at 2x — the fractional
+	 * display's version of the same unit error, and the one that is hardest to notice because everything looks right at
+	 * 1x (`AGWebEnginePointerMotion` had the identical defect, measured as a drag selecting the text above the pointer).
+	 * The page has already reported forty for one line at 1x; it has to report forty again at 2x.
+	 *
+	 * This runs LAST because it changes the size of the frame the engine paints, and every colour check above reads that
+	 * frame at its 1x size. */
+	{
+		char want[64];
+
+		AGWebEngineSetDeviceScaleFactor(app.engine, 2.0);
+		AGWebEngineIterate(app.engine);
+		nap(200);
+		AGWebEngineScroll(app.engine, HOVER_X, HOVER_Y, 0 /* AGAxisVertical */, AGWebEnginePointsPerWheelLine, 0, 0,
+				  (uint32_t)now_ms());
+		snprintf(want, sizeof want, "wheel dy=%d", (int)AGWebEnginePointsPerWheelLine);
+		if (wait_for_title(&app, want, 3000)) {
+			printf("input: one line at 2x reached the page as \"%s\"\n", AGWebEngineTitle(app.engine) ?: "(no title)");
+		} else {
+			fprintf(stderr, "input: one line at 2x gave \"%s\", wanted %s\n",
+				AGWebEngineTitle(app.engine) ?: "(no title)", want);
+			failures++;
+		}
+		AGWebEngineSetDeviceScaleFactor(app.engine, 1.0);
 	}
 
 	free(app.frame);

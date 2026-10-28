@@ -447,6 +447,50 @@ webengine-cursor: a link -> 3, text -> 4, crosshair -> 2, not-allowed -> 18, non
 `webengine-cursor` SKIPS on a WebKit without the fork's API, which is the honest answer there: the component still builds,
 runs and keeps its own pointer.
 
+## The wheel moved the page one point per notch, because two units were never converted
+
+A person reported that scrolling in a web view was **way too slow**, and it was a factor of forty: one click of the wheel
+moved the page ONE point, and on a fractional display less than that, because WebKit divides the axis by the device scale
+factor. A page crawled a pixel at a time.
+
+Two unit errors, one on each side of the door, and neither looked wrong on its own:
+
+- `-[WKWebView scrollWheel:]` handed the AppKit's `-deltaY` — the count of WHEEL LINES, 1.0 per notch — to
+  `AGWebEngineScroll` as if it were a distance. The seam's own `AGEvent.delta` is 15.0 per notch, so even the seam's
+  unit was off by fifteen.
+- `AGWebEngineScroll` passed whatever it got straight to WPE, whose 2-D smooth axis is in **device pixels** (WebKit
+  divides it by the device scale factor on its way to CSS pixels). So the number was neither in the seam's unit nor in
+  the wire's.
+
+The door now speaks **page points**, which is the unit that file's whole INPUT section already uses for sizes and
+positions, and both conversions happen once each: the view turns wheel lines into points, and the seam turns points into
+device pixels. One line is `AGWebEnginePointsPerWheelLine` — **forty points**, which is WebCore's own
+`Scrollbar::pixelsPerLineStep()` and what Apple's macOS wheel bridge multiplies a non-precise event's `deltaY` by. That
+constant is deliberately in the header rather than at either end: the view needs it and the `value120` fallback needs it,
+and two copies would be two scroll speeds.
+
+**MEASURED BY THE PAGE, NOT BY THE SCROLL.** A page that scrolls "the right way" says nothing about the distance, so the
+probe's page now reports its own `wheel` event's `deltaY` in the title:
+
+```
+input: one notch of steps (120) reached the page as "wheel dy=40"
+input: two lines of distance reached the page as "wheel dy=80"
+input: one line at 2x reached the page as "wheel dy=40"   (the device scale factor is applied, so 2x is not half)
+
+appkit_webview: one notch of wheel reached the page as "Agora web view wheel dy=40" after 20 ms
+appkit_webview: after 3 notch(es) the band below the fold is visible
+```
+
+**AND THAT TEST WAS WRITTEN AROUND THE BUG.** `appkit_webview` had sent `deltaY = -60` four times to bring a band 280
+points down into view — sensible only if a line were a pixel — so it passed on the broken code and would have failed on
+the fix. It sends notches now. The same is true of the one-axis WPE form: `wpe_input_axis_event` reads its value as a
+TICK and multiplies by its own line step, which would have been correct for a single notch and wrong for a coalesced
+batch of three, so the 2-D smooth form (which carries a distance) stays.
+
+What this does NOT add is wheel **acceleration**: a wheel is one line per notch here, while macOS applies acceleration and
+most X11 toolkits turn a notch into three lines. `AGWebEnginePointsPerWheelLine` is the one knob if a person wants a
+fuller page per click.
+
 ## The first load took 6.5 seconds, and it was a vblank wait
 
 Building WPE WebKit 2.54.2 locally made every page take seven seconds before anything appeared. The number came from the

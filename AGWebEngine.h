@@ -263,11 +263,26 @@ void AGWebEnginePointerMotion(AGWebEngine *engine, int x, int y, uint32_t modifi
 void AGWebEnginePointerButton(AGWebEngine *engine, int x, int y, uint32_t button, int pressed, uint32_t modifiers,
 			      uint32_t time_ms);
 
-/* **ONE AXIS OF ONE GESTURE**, in the AppKit's units: `delta` is the precise distance in the compositor's where one
- * wheel notch is 15.0 — positive meaning "scroll down", as `wl_pointer.axis` and `AGEvent.delta` both mean it — and
- * `value120` is the same motion in hundred-and-twentieths for a device that has steps and no precise distance (0 when
- * it has neither). `axis` is `AGAxisVertical` or `AGAxisHorizontal`. The seam flips the sign on its way to WebKit,
- * because WPE's positive value means "scroll up"; see `AGWebEngine-WPE.c`. */
+/* **HOW FAR ONE LINE OF WHEEL IS, IN PAGE POINTS — THE ONE NUMBER THAT DECIDES HOW FAST A PAGE SCROLLS.** A wheel
+ * notch is one LINE in this tree's vocabulary (the AppKit's `-deltaY` is 1.0 per notch, and the compositor's
+ * `wl_pointer.axis` distance is 15.0), and a line is forty points: `WebCore::Scrollbar::pixelsPerLineStep()`'s own
+ * constant, which is what Apple's macOS wheel bridge multiplies a non-precise event's `deltaY` by. It is here rather than
+ * in either caller because BOTH need it — the view to turn an `NSEvent` into a distance, and this seam to fall back on it
+ * when a caller has only `value120` — and two copies of it would be two scroll speeds.
+ *
+ * **MEASURED, AND THE BUG IT FIXES WAS A FACTOR OF FORTY.** The view used to hand the AppKit's line count to
+ * `AGWebEngineScroll` as if it were a distance, and this seam used to pass that straight to WPE as if it were pixels — so
+ * one notch scrolled ONE point, over a fractional display even less (WebKit divides by the device scale factor), and a
+ * page moved a pixel per click of the wheel. A factor that big is not a taste; it is a unit error, and it read as
+ * "scrolling is way too slow". */
+#define AGWebEnginePointsPerWheelLine 40.0
+
+/* **ONE AXIS OF ONE GESTURE**, in PAGE POINTS: `delta` is a distance, positive meaning "scroll down", and one wheel
+ * line is `AGWebEnginePointsPerWheelLine` of them. `value120` is the same motion in hundred-and-twentieths (120 per
+ * notch) for a device or a caller that has steps and no precise distance, and is consulted only when `delta` is 0.
+ * `axis` is `AGAxisVertical` or `AGAxisHorizontal`. The seam flips the sign on its way to WebKit, because WPE's positive
+ * value means "scroll up", and multiplies by the device scale factor because WPE's axis is in device pixels; see
+ * `AGWebEngine-WPE.c`. */
 void AGWebEngineScroll(AGWebEngine *engine, int x, int y, uint32_t axis, double delta, int32_t value120,
 		       uint32_t modifiers, uint32_t time_ms);
 

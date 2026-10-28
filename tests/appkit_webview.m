@@ -194,7 +194,11 @@ int main(void)
 		"<div id=spacer></div><div id=marker></div>"
 		"<div style='height:400px;background:#0000c0'></div>"
 		"<script>document.addEventListener('selectionchange',function(){"
-		"document.title='Agora web view sel='+String(String(window.getSelection()).length);});</script>"
+		"document.title='Agora web view sel='+String(String(window.getSelection()).length);});"
+		/* **AND THE WHEEL REPORTS ITS OWN DISTANCE**, which is how a unit error in the seam is caught: the page says what
+		 * it was told, not what the host meant. */
+		"window.addEventListener('wheel',function(e){"
+		"document.title='Agora web view wheel dy='+Math.round(e.deltaY);});</script>"
 		"</body></html>";
 	AGWebDelegate *delegate = [[AGWebDelegate alloc] init];
 	WKWebView *view;
@@ -594,34 +598,68 @@ int main(void)
 		}
 	}
 
-	/* 3. THE WHEEL, IN APPKIT'S SIGN. `deltaY` is positive when a person scrolls UP, and the cyan band begins 280 points
-	 * down the page — 80 points below the fold — so the scroll has to be more than one notch. Four events of -60 are sent
-	 * with the run loop pumped between them, because WebKit's scroll is smooth and a burst with no loop between is a
-	 * burst into a stopped engine. */
+	/* 3. THE WHEEL, IN APPKIT'S SIGN AND IN APPKIT'S UNIT. `deltaY` is positive when a person scrolls UP and it counts
+	 * WHEEL LINES — 1.0 per notch — and the cyan band begins 280 points down the page, 80 points below the fold, so about
+	 * three notches bring it into view. **THE UNITS ARE THE POINT OF THIS CHECK AS MUCH AS THE PIXELS ARE.** This block
+	 * used to send 60.0 four times, because the view used to pass the line count straight to the engine as if it were a
+	 * distance — so the test was written around the bug and "proved" that scrolling worked while a real wheel moved a page
+	 * one point per click. A notch is a line, and a line is `AGWebEnginePointsPerWheelLine` points.
+	 *
+	 * **AND THE PAGE IS ASKED WHAT IT HEARD, FIRST.** One notch is sent and the page's own `wheel` listener reports its
+	 * `deltaY`: forty, not one. That is the assertion that cannot be satisfied by a scroll that happens to look right. */
+	{
+		NSString *heard;
+		int waited_wheel = 0;
+		int want = (int)AGWebEnginePointsPerWheelLine;
+		char wanted[64];
+
+		snprintf(wanted, sizeof wanted, "wheel dy=%d", want);
+		event = [NSEvent cg_scrollEventWithDeltaX:0.0 deltaY:-1.0
+						location:NSMakePoint(160.0, (CGFloat)(H - 60))
+					   modifierFlags:0
+					       timestamp:1.0
+					    windowNumber:0];
+		[view scrollWheel:event];
+		while (waited_wheel < 100) {
+			heard = [view title];
+			if (heard != nil && [heard rangeOfString:[NSString stringWithUTF8String:wanted]].location != NSNotFound) {
+				break;
+			}
+			pump(0.02);
+			waited_wheel++;
+		}
+		heard = [view title];
+		printf("appkit_webview: one notch of wheel reached the page as \"%s\" after %d ms\n",
+		       [heard UTF8String] ?: "(nil)", waited_wheel * 20);
+		check(heard != nil && [heard rangeOfString:[NSString stringWithUTF8String:wanted]].location != NSNotFound,
+		      "one wheel notch reaches the page as ONE LINE's worth of points, not as one point");
+	}
+
 	{
 		int scrolled = 0;
-		int step;
+		int notch;
 
-		for (step = 0; step < 4; step++) {
-			event = [NSEvent cg_scrollEventWithDeltaX:0.0 deltaY:-60.0
+		/* **NOTCHES UNTIL THE BAND IS ON SCREEN, BECAUSE A SMOOTH SCROLL'S ARRIVAL IS WEBKIT'S BUSINESS.** Each notch
+		 * is forty points and the band begins 110 points down, so three of them are enough in principle — but WebKit
+		 * ANIMATES each wheel event, and a notch sent mid-animation replaces the rest of the previous one rather than
+		 * adding to it. MEASURED: three notches 100 ms apart did not arrive, which is why this is "until visible" with a
+		 * cap instead of a count. What the count would have asserted — the distance one notch means — is the check above,
+		 * made by the page itself and independent of any animation. */
+		for (notch = 0; notch < 8 && !scrolled; notch++) {
+			event = [NSEvent cg_scrollEventWithDeltaX:0.0 deltaY:-1.0
 							location:NSMakePoint(160.0, (CGFloat)(H - 60))
 						   modifierFlags:0
-						       timestamp:2.0 + step
+						       timestamp:2.0 + notch
 						    windowNumber:0];
 			[view scrollWheel:event];
-			pump(0.1);
+			pump(0.15);
+			[rep release];
+			rep = draw(view);
+			scrolled = rep_has(rep, is_cyan);
+			printf("appkit_webview: after %d notch(es) the band below the fold is %svisible\n", notch + 1,
+			       scrolled ? "" : "not ");
 		}
-		{
-			int tries;
-
-			for (tries = 0; tries < 80 && !scrolled; tries++) {
-				pump(0.05);
-				[rep release];
-				rep = draw(view);
-				scrolled = rep_has(rep, is_cyan);
-			}
-		}
-		check(scrolled, "the wheel reached the page (the band below the fold came into view)");
+		check(scrolled, "and notches of the wheel bring the band below the fold into view");
 	}
 
 	/* 4. **A STALE FRAME IS NOT STRETCHED, WHICH IS THE NOISE A RESIZE USED TO MAKE.** Reported from the running demo: a
