@@ -421,6 +421,21 @@ WebKit announces it, **0 ms** in the offscreen test.
 held by the AppKit; the first version retained the new one and released the old, which deallocated the singleton and left the
 class with a dangling pointer — the cursor then stopped changing at all.
 
+**And a cursor is only half the wire: the NAME is the other half, and the view has to ask for the pointer.** An `NSCursor`
+carries no pixels here — `-image` is nil for every shared cursor — so what the view installs has to be told to the compositor
+by name (`NSCursor -name`, and `AGWindowSetCursor`/`agora_window.set_cursor` in `libagora-app` and `window-server`). Which
+means the page's decision reaches the glass only if the engine hears the pointer AT ALL: `-acceptsMouseMovedEvents` is NO by
+default on a window, so `-mouseMoved:` never runs, the engine never learns what is under the pointer, and the page's cursor
+is never asked for. MEASURED on this tree's own demo before the fix: a page that was one big link sent the compositor
+`left_ptr` and nothing else, and not one motion reached the view. So the VIEW installs the `NSTrackingArea`
+(`NSTrackingMouseMoved | NSTrackingActiveAlways | NSTrackingInVisibleRect`) rather than leaving it to an embedder that cannot
+know — and the page's `:hover` came back with it.
+
+MEASURED end to end afterwards, on `demo/agora-webview.sh` against a page that is one link and with `AWS_CURSOR_DIAG=1`:
+three motions reached the view, the engine reported `3 -> pointer`, and the compositor answered
+`DIAG cursor: window 1 asks for pointer, which the theme has at 32x32, hotspot (16,4)` — the theme's hand, re-applied to
+the host's X cursor. That is the whole pipeline in one log: page → `NSCursor` → name → protocol → artwork.
+
 ```
 appkit_webview: the cursor over the link is "pointer" after 0 ms, over the prose is "text" after 0 ms
   ok     the pointer over a link is a hand

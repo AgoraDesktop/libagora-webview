@@ -224,6 +224,23 @@ int main(void)
 	check([view frameSizeInPixels].width == W && [view frameSizeInPixels].height == H,
 	      "the engine's frame is the view's size in device pixels");
 
+	/* **AND THE VIEW ASKS FOR THE POINTER ITSELF, WHICH IS WHAT MAKES A PAGE'S HOVER (AND ITS CURSOR) WORK IN AN
+	 * APPLICATION THAT KNOWS NOTHING ABOUT IT.** A window does not deliver a bare motion unless it was told to, and
+	 * `-acceptsMouseMovedEvents` is NO by default — so a view that needs the pointer installs its own tracking area. The
+	 * checks below then drive `-mouseMoved:` directly, which is what the area's owner receives; WITHOUT this area they
+	 * would be the only way the engine ever heard a motion, and a real window would never give it one. */
+	{
+		NSArray *areas = [view trackingAreas];
+		NSTrackingArea *area = ([areas count] > 0) ? [areas objectAtIndex:0] : nil;
+		NSTrackingAreaOptions options = (area != nil) ? [area options] : 0;
+
+		check(area != nil && (options & NSTrackingMouseMoved) != 0 &&
+			      (options & NSTrackingInVisibleRect) != 0 && (options & NSTrackingActiveAlways) != 0,
+		      "the view asks for mouse-moved events through its own tracking area, over its visible rectangle");
+		check(area != nil && (id)[area owner] == (id)view,
+		      "and the area's owner is the view, which is what turns a motion into an engine pointer move");
+	}
+
 	/* 1. THE PAGE, UPRIGHT. */
 	top_is_top = rep_top_is_view_top();
 	printf("appkit_webview: this rep's rows run %s\n", top_is_top ? "down from the view's top" : "up from its bottom");

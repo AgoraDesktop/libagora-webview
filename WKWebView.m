@@ -151,7 +151,33 @@ static void ag_view_title_changed(void *context, AGWebEngine *engine, const char
 	}
 	_scale = 1.0;
 	_dirty = YES;
+	/* **AND THE POINTER'S AREA NOW, RATHER THAN AT THE FIRST RESIZE.** This AppKit calls `-updateTrackingAreas` from a
+	 * frame CHANGE, and a web view created with the frame it keeps would otherwise never hear a motion at all — which is
+	 * the failure the area exists to prevent. `NSTrackingInVisibleRect` means the rectangle needs no repair afterwards, so
+	 * the later calls are only a guard against the area having been removed. */
+	[self updateTrackingAreas];
 	return self;
+}
+
+/* **THE POINTER, WHICH THE PAGE NEEDS TO HEAR ABOUT AND THE WINDOW WILL NOT TELL IT.** Install the area that asks for
+ * moves: `NSTrackingInVisibleRect` makes its rectangle the view's own on every resolution (so a resized view needs no
+ * repair), and `NSTrackingActiveAlways` is what makes hover work in a window that is not key — which a page's links do
+ * expect, a browser being one of the few views whose hover is not a prelight.
+ *
+ * WHY THIS IS A LIBRARY'S JOB AND NOT AN APPLICATION'S: an embedder that had to know would be one that quietly lost every
+ * hover in the page, and the page's CURSOR with it. Apple's own `WKWebView` installs its own areas for that reason. The
+ * enter/exit pair comes along so an enter has a door of the same kind, and the engine ignores both today. */
+- (void)updateTrackingAreas
+{
+	[super updateTrackingAreas];
+	if (_pointerArea == nil) {
+		NSTrackingAreaOptions options = NSTrackingMouseMoved | NSTrackingMouseEnteredAndExited |
+			NSTrackingActiveAlways | NSTrackingInVisibleRect;
+
+		_pointerArea = [[NSTrackingArea alloc] initWithRect:[self bounds] options:options owner:self
+							  userInfo:nil];
+		[self addTrackingArea:_pointerArea];
+	}
 }
 
 - (void)dealloc
@@ -162,6 +188,13 @@ static void ag_view_title_changed(void *context, AGWebEngine *engine, const char
 	[_pump invalidate];
 	[_pump release];
 	_pump = nil;
+	/* AND THE AREA BEFORE THE VIEW IT BELONGS TO, because an area outliving its owner is exactly the dangling owner the
+	 * engine would call. `-removeTrackingArea:` is what a view that is going away owes its areas. */
+	if (_pointerArea != nil) {
+		[self removeTrackingArea:_pointerArea];
+		[_pointerArea release];
+		_pointerArea = nil;
+	}
 	/* The engine after the timer that pumps it, and before the pixels it wrote. */
 	if (_engine != NULL) {
 		AGWebEngineDestroy((AGWebEngine *)_engine);

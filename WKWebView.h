@@ -90,6 +90,14 @@ NS_ASSUME_NONNULL_BEGIN
 	double _last_drag_extend_ms;
 	NSCursor *_cursor;		/* the pointer over the page, as the page asked for it */
 	AGWebCursor _cursor_kind;
+	/* **THE AREA THAT MAKES THE PAGE HEAR THE POINTER WITHOUT THE APPLICATION ASKING FOR MOVES.** A window's
+	 * `-acceptsMouseMovedEvents` is NO by default — Apple's, and Agora follows it — so a view that needs to know where the
+	 * pointer is must install an `NSTrackingArea` with `NSTrackingMouseMoved`, exactly as Apple's own documentation says and
+	 * as WebKit does in its own embedders. Without this the engine never learns what is under the pointer, so a page's
+	 * `:hover` is dead AND the cursor it would ask for is never asked for — MEASURED on this tree's own demo, where a page
+	 * that was one big link sent the compositor nothing but the default arrow. Kept to be removed again; see
+	 * `-updateTrackingAreas`. */
+	NSTrackingArea *_pointerArea;
 	CGFloat _drag_last_x;
 	CGFloat _drag_last_y;
 	BOOL _drag_extending;
