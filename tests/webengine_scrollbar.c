@@ -354,6 +354,27 @@ static int grip_rings(struct App *app, int horizontal)
 	return rings;
 }
 
+/* **THE GRIP IS POLLED, BECAUSE WEBKIT PAINTS THE BAR IN MORE THAN ONE FRAME.** MEASURED: a frame can carry the groove
+ * and a plain white knob, with the thumb's own background — the rings — arriving in the next composite, so a count taken
+ * the instant the bar exists reads zero on a bar that is about to have three. Every other colour assertion in this suite
+ * polls for the same reason; so does this one. */
+static int grip_rings_waiting(struct App *app, int horizontal)
+{
+	int started = now_ms();
+	int rings = 0;
+
+	do {
+		rings = grip_rings(app, horizontal);
+		if (rings == 3) {
+			break;
+		}
+		AGWebEngineIterate(app->engine);
+		draw(app);
+		nap(10);
+	} while (now_ms() - started < 2000);
+	return rings;
+}
+
 static int s_failed;
 
 static void check(int ok, const char *what)
@@ -430,7 +451,7 @@ int main(void)
 	/* **AND THE GRIP: THREE HOLLOW RINGS**, which is `NSScrollerCell`'s mark — radius 2, a 1-point `#bcbcbc` stroke, 8
 	 * points apart — and not three filled dots, because the knob's own white shows through the middle of each. */
 	{
-		int rings = grip_rings(&styled, 0);
+		int rings = grip_rings_waiting(&styled, 0);
 
 		printf("  (note: the knob holds %d hollow ring(s))\n", rings);
 		check(rings == 3, "the knob carries the APPKIT's grip: three HOLLOW rings, 8 points apart");
@@ -491,11 +512,28 @@ int main(void)
 			printf("  (note: the wide page's colour reaches y=%d of %d)\n", bottom_edge, wide.frame_height);
 			check(bottom_edge >= 0 && bottom_edge < wide.frame_height - BAR_WIDTH + 1,
 			      "a page wider than the viewport gets a bar along the bottom, taking its points out of the layout");
-			histogram_row(&wide, &bottom);
+			/* **AND WAIT FOR THE BAR ITSELF, NOT JUST FOR THE PAGE.** The horizontal bar appears with the frame that
+			 * re-lays out for it, and sampling the row the instant the page colour is up read the bar's plastic before
+			 * the knob had a length — MEASURED as a grip that was there on one run and gone on the next. The wait is for
+			 * the groove, which is the bar existing. */
+			{
+				int started = now_ms();
+
+				do {
+					draw(&wide);
+					histogram_row(&wide, &bottom);
+					if (histogram_has_grey(&bottom)) {
+						break;
+					}
+					AGWebEngineIterate(wide.engine);
+					nap(10);
+				} while (now_ms() - started < 2000);
+			}
 			note_histogram("the bottom bar's row", &bottom);
+			maybe_write_ppm(&wide, getenv("AGWEBVIEW_SCROLLBAR_PPM_WIDE"));
 			check(histogram_has_grey(&bottom), "and that bar wears the AppKit's greys too");
 			{
-				int rings = grip_rings(&wide, 1);
+				int rings = grip_rings_waiting(&wide, 1);
 
 				printf("  (note: the horizontal knob holds %d hollow ring(s))\n", rings);
 				check(rings == 3, "and its knob carries the same three rings, laid along the bar");
