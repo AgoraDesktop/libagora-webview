@@ -82,6 +82,19 @@ add_test(NAME webengine-input COMMAND webengine_input)
 set_tests_properties(webengine-input PROPERTIES SKIP_RETURN_CODE 77
   ENVIRONMENT "${_agora_webview_test_env}")
 
+# **AND THE PAGE'S BARS, WHICH ARE THE ONE PIECE OF WEBKIT'S OWN CHROME A PAGE WEARS ON AGORA'S DESKTOP.** The port draws
+# them with WebKit's Adwaita theme as OVERLAY bars, so a page at rest has no visible bar at all; the engine installs a user
+# style sheet that redraws them as the AppKit's `NSScroller` (fifteen points, a #d9d9d9 groove, a white knob edged in
+# #bcbcbc). This measures the PIXELS and the LAYOUT — styling `::-webkit-scrollbar` makes WebKit take the bar's points out
+# of the viewport — and the escape hatch, because "we restyled the bars" and "we drew a grey line somewhere" would
+# otherwise pass the same checks.
+add_executable(webengine_scrollbar webengine_scrollbar.c)
+target_link_libraries(webengine_scrollbar PRIVATE WebView)
+
+add_test(NAME webengine-scrollbar COMMAND webengine_scrollbar)
+set_tests_properties(webengine-scrollbar PROPERTIES SKIP_RETURN_CODE 77
+  ENVIRONMENT "${_agora_webview_test_env}")
+
 # **THE CLASS, OFFSHORE: no compositor, no window, a bitmap rep for a surface.** A page must arrive upright (the rep's
 # own orientation is measured first, so "upright" is a claim about the view rather than about the surface), the title
 # must be the page's, and the pointer and the wheel must reach the page through the view's own conversion — which is

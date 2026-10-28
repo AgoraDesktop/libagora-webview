@@ -187,6 +187,17 @@ void AGWebEngineLoadHTML(AGWebEngine *engine, const char *html, const char *base
  * pixels each of its points owns — and a caller may set either alone. */
 void AGWebEngineSetDeviceScaleFactor(AGWebEngine *engine, double factor);
 
+/* **AND THE PAGE'S SCROLLBARS ARE THE DESKTOP'S, WHICH IS A CHOICE THIS SEAM MAKES FOR EVERY CALLER.** A page's bars are
+ * drawn by the web process, and this port's are Adwaita OVERLAY bars — invisible until something scrolls — so the engine
+ * installs a user style sheet that redraws them as the AppKit's `NSScroller`: fifteen points wide with a #d9d9d9 groove,
+ * a white knob edged in #bcbcbc and an arrow button at each end. It also ends the overlay behaviour, because styling
+ * `::-webkit-scrollbar` makes the bar part of the page's LAYOUT — so a page lays out fifteen points narrower than it did
+ * with overlays, which is exactly what a scroll view with a scroller does.
+ *
+ * IT IS NOT A DOOR, because there is nothing for a caller to decide: a web view in a window either wears the desktop's
+ * bar or wears a foreign one. `AGWEBVIEW_NO_SCROLLBAR_STYLE` in the environment is the way to see the difference, and it is
+ * read when the engine is MADE. `webengine-scrollbar` is the test. */
+
 /* **A RESIZE IS THE ENGINE'S TO RELAYOUT**, which is why it is a door and not a property: WebKit re-lays out the page
  * for the new viewport and paints when it is ready, and a caller that only resized its own buffer would keep drawing
  * the old layout stretched. Sizes are DEVICE pixels — `round(points * AGWindowServerScale(server))`, the number a

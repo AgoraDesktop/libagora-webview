@@ -82,6 +82,64 @@ void wl_shm_buffer_end_access(struct wl_shm_buffer *buffer);
 
 static void ag_web_push_geometry(AGWebEngine *engine, int size_changed, int scale_changed);
 
+/* **THE SCROLLBAR'S NUMBERS ARE THE APPKIT'S, COPIED ONCE, AND THE COPY IS THE COUPLING WORTH NAMING.** `libagora-webview`
+ * is one layer below the AppKit and links none of it, so it cannot ask `+[NSScroller scrollerWidth]` or read a colour —
+ * which leaves two choices: an engine-side constant set that can drift from the scroller's art, or a caller that supplies
+ * the CSS. This is the first, with the AppKit's doors named in every value so a change there is a change here, and the
+ * `webengine-scrollbar` probe measures the drawn result rather than trusting either side.
+ *
+ * THE TRIANGLES ARE INLINE SVG because CSS has no triangle and the button pseudo-element takes only a background image;
+ * the geometry is `NSScrollerCell`'s (`NS_SCROLLER_ARROW_HALF` 0.176 and `…_HEIGHT` 0.235 of a 15-point button). */
+#define AG_WEB_SCROLLBAR_WIDTH 15
+#define AG_WEB_SCROLLBAR_GROOVE "#d9d9d9"	/* +cg_scrollerTrackColor: 0.85 */
+#define AG_WEB_SCROLLBAR_KNOB "#ffffff"		/* +controlBackgroundColor */
+#define AG_WEB_SCROLLBAR_EDGE "#bcbcbc"		/* +controlDarkShadowColor: 0.737 */
+#define AG_WEB_SCROLLBAR_BUTTON_EDGE "#999999"	/* +controlShadowColor: 0.60 */
+
+/* FIFTEEN POINTS IS `+[NSScroller scrollerWidth]`, and every colour here is a door in `libagora-app/NSColor.m`:
+ * `+cg_scrollerTrackColor` (0.85) for the groove, `+controlBackgroundColor` (white) for the knob, `+controlDarkShadowColor`
+ * (0.737) for its edge and `+controlShadowColor` (0.60) for the buttons'. The knob's radius is `NS_SCROLLER_BAR_RADIUS`.
+ * THE NUMBERS CANNOT BE ASKED FOR ACROSS THE COMPONENT BOUNDARY — this file links no AppKit — so they are copied with
+ * their sources named, and `webengine-scrollbar` measures the drawn result rather than trusting either side. */
+static const char *const ag_web_scrollbar_css =
+	"::-webkit-scrollbar { width: 15px; height: 15px; }"
+	"::-webkit-scrollbar-track { background: " AG_WEB_SCROLLBAR_GROOVE "; }"
+	"::-webkit-scrollbar-thumb { background: " AG_WEB_SCROLLBAR_KNOB ";"
+	" border: 1px solid " AG_WEB_SCROLLBAR_EDGE "; border-radius: 3px;"
+	" min-height: 15px; min-width: 15px; }"
+	"::-webkit-scrollbar-corner { background: " AG_WEB_SCROLLBAR_GROOVE "; }"
+	/* **THE BUTTONS HAVE NO OUTLINE, WHICH IS `NSScrollerCell`'s OWN ARRANGEMENT**: it paints the whole frame in the
+	 * button face and then the groove only into the slot between them, so a button's edge is a CONTRAST and not a line.
+	 * MEASURED both ways: a one-point border put a #999999 ring round each button that Agora's art does not have. */
+	"::-webkit-scrollbar-button { display: block; width: 15px; height: 15px;"
+	" background-color: " AG_WEB_SCROLLBAR_KNOB "; background-repeat: no-repeat; background-position: center;"
+	" border: 0; }"
+	/* THE TRIANGLES ARE INLINE SVG BECAUSE CSS HAS NO TRIANGLE PRIMITIVE AND THE BUTTON PSEUDO-ELEMENT TAKES ONLY AN
+	 * IMAGE. The geometry is `NSScrollerCell`'s: half-width 0.176 and height 0.235 of a 15-point button, so 5.2 points
+	 * across and 3.5 tall, centred in the button. */
+	"::-webkit-scrollbar-button:vertical:decrement { background-image: url(\"data:image/svg+xml,"
+	"%3Csvg xmlns='http://www.w3.org/2000/svg' width='15' height='15'%3E"
+	"%3Cpolygon points='7.5,5.5 10.1,9 4.9,9' fill='black'/%3E%3C/svg%3E\"); }"
+	"::-webkit-scrollbar-button:vertical:increment { background-image: url(\"data:image/svg+xml,"
+	"%3Csvg xmlns='http://www.w3.org/2000/svg' width='15' height='15'%3E"
+	"%3Cpolygon points='7.5,9.5 10.1,6 4.9,6' fill='black'/%3E%3C/svg%3E\"); }"
+	"::-webkit-scrollbar-button:horizontal:decrement { background-image: url(\"data:image/svg+xml,"
+	"%3Csvg xmlns='http://www.w3.org/2000/svg' width='15' height='15'%3E"
+	"%3Cpolygon points='5.5,7.5 9,4.9 9,10.1' fill='black'/%3E%3C/svg%3E\"); }"
+	/* **ONE ARROW AT EACH END, WHICH IS WHAT `NSScrollerCell` DRAWS.** WebKit's theme puts TWO buttons at each end
+	 * (`ScrollbarButtonsDoubleBoth`), and `:single-button` is a question an author can ask and not a choice one can make —
+	 * it matches whatever placement the theme has (MEASURED: four 15-point buttons, up-down at the top and up-down at the
+	 * bottom). So the second of each pair is dropped with `display: none`, which also gives its fifteen points back to the
+	 * groove, leaving an up arrow, the groove, and a down arrow — the scroller this desktop already has. */
+	"::-webkit-scrollbar-button:vertical:start:increment { display: none; }"
+	"::-webkit-scrollbar-button:vertical:end:decrement { display: none; }"
+	"::-webkit-scrollbar-button:horizontal:start:increment { display: none; }"
+	"::-webkit-scrollbar-button:horizontal:end:decrement { display: none; }"
+	"::-webkit-scrollbar-button:horizontal:increment { background-image: url(\"data:image/svg+xml,"
+	"%3Csvg xmlns='http://www.w3.org/2000/svg' width='15' height='15'%3E"
+	"%3Cpolygon points='9.5,7.5 6,4.9 6,10.1' fill='black'/%3E%3C/svg%3E\"); }";
+
+
 struct AGWebEngine {
 	AGWebEngineCallbacks callbacks;
 	void *context;
@@ -761,6 +819,36 @@ static void ag_web_title_changed(GObject *object, GParamSpec *spec, gpointer dat
  * the seam
  * ---------------------------------------------------------------------------------------------------------------- */
 
+static void ag_web_install_scrollbar_style(AGWebEngine *engine)
+{
+	WebKitUserContentManager *manager;
+	WebKitUserStyleSheet *sheet;
+
+	if (engine == NULL || engine->view == NULL) {
+		return;
+	}
+	if (getenv("AGWEBVIEW_NO_SCROLLBAR_STYLE") != NULL) {
+		return;	/* the escape hatch: see what WebKit's own overlay bars look like */
+	}
+	/* **THE MANAGER IS THE VIEW'S OWN, WHICH IS WHY NO CONSTRUCTOR CHANGE WAS NEEDED.** The WPE API has one view
+	 * constructor and a getter for the manager it made (`WebKitWebView.h:663`), so a style sheet is two public calls. */
+	manager = webkit_web_view_get_user_content_manager(engine->view);
+	if (manager == NULL) {
+		return;
+	}
+	sheet = webkit_user_style_sheet_new(ag_web_scrollbar_css, WEBKIT_USER_CONTENT_INJECT_ALL_FRAMES,
+					    WEBKIT_USER_STYLE_LEVEL_USER, NULL, NULL);
+	if (sheet == NULL) {
+		return;
+	}
+	webkit_user_content_manager_add_style_sheet(manager, sheet);
+	webkit_user_style_sheet_unref(sheet);
+	if (getenv("AG_WEBVIEW_DIAG") != NULL) {
+		fprintf(stderr, "AGWebEngine: the page's scrollbars are restyled to the AppKit's %d-point scroller\n",
+			AG_WEB_SCROLLBAR_WIDTH);
+	}
+}
+
 AGWebEngine *AGWebEngineCreate(int width, int height, const AGWebEngineCallbacks *callbacks, void *context)
 {
 	return AGWebEngineCreateWithExport(width, height, AGWebExportSHM, callbacks, context);
@@ -888,6 +976,31 @@ AGWebEngine *AGWebEngineCreateWithOptions(int width, int height, AGWebExport exp
 		free(engine);
 		return NULL;
 	}
+	/* **AND THE SCROLLBARS, WHICH ARE THE ONE PIECE OF WEBKIT'S OWN CHROME A PAGE WEARS ON AGORA'S DESKTOP.** The page's
+	 * bars are drawn by the WEB PROCESS (`ScrollbarThemeAdwaita`), and on this port they are OVERLAY bars by default —
+	 * `usesOverlayScrollbars()` is `SystemSettings::overlayScrolling().value_or(true)` and WPE has no environment
+	 * override, so they fade away and a page at rest has no visible bar at all. MEASURED on a screenshot of a 3000-point
+	 * document: the page's own colour ran to its last column and the glow beside it was the desktop, not a bar.
+	 *
+	 * SO THEY ARE RESTYLED, THROUGH THE USER STYLE SHEET. `webkit_web_view_get_user_content_manager` is public in WPE and
+	 * needs no fork change; the numbers are the AppKit's own scroller, which is where the coupling is: 15 points wide
+	 * (`+[NSScroller scrollerWidth]`), a #d9d9d9 groove (`+cg_scrollerTrackColor`), a white knob with a #bcbcbc edge and
+	 * a 3-point radius (`+controlBackgroundColor` over `+controlDarkShadowColor`, `NS_SCROLLER_BAR_RADIUS`), and arrow
+	 * buttons of the same 15 points carrying a black triangle. The triangle is an inline SVG because CSS has no triangle
+	 * primitive and the button pseudo-element takes an image; its size is `NS_SCROLLER_ARROW_HALF`/`…_HEIGHT` of a
+	 * 15-point button, i.e. 5.2 by 3.5 points.
+	 *
+	 * **STYLING `::-webkit-scrollbar` ALSO ENDS THE OVERLAY BEHAVIOUR, AND THAT IS THE POINT RATHER THAN A SIDE EFFECT.**
+	 * WebKit's `usesLegacyScrollbarStyle` makes the bar PART OF THE LAYOUT (`LocalFrameView.cpp:1677`), so it takes its
+	 * fifteen points out of the viewport and stays on screen — which is what an `NSScroller` does in a scroll view, and
+	 * the reason a person can see where they are in a page without moving the wheel. The reflow is the honest cost: a
+	 * page lays out 15 points narrower than it did while the bars were overlays.
+	 *
+	 * **THE LEVEL IS `USER`, WHICH OUTRANKS THE PAGE.** WebKit's own header says so ("its contents always override other
+	 * style sheets"), and for a desktop's pointer and bar vocabulary that is the answer we want: a site that paints its
+	 * own scrollbars gets Agora's unless `AGWEBVIEW_NO_SCROLLBAR_STYLE` is set — one name, read here, so a session can see
+	 * what WebKit draws on its own. */
+	ag_web_install_scrollbar_style(engine);
 	g_signal_connect(engine->view, "load-changed", G_CALLBACK(ag_web_load_changed), engine);
 	g_signal_connect(engine->view, "notify::title", G_CALLBACK(ag_web_title_changed), engine);
 	g_signal_connect(engine->view, "decide-policy", G_CALLBACK(ag_web_decide_policy), engine);

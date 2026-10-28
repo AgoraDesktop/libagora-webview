@@ -237,6 +237,7 @@ measured rather than assumed, and both are in `AGWebEngine-WPE.c` where they bit
 | `webengine-window` | the same, into a real **window's** own buffer, asserted on the composited screenshot — nested and opt-in (`AGORA_ALLOW_NESTED=1`) | EGL + a compositor that imports dma-buf |
 | `webengine-egl` | the same page through the **EGL export**: imported, blitted flipped, read back — asserted as a red band at the top and blue below, because a flipped blit or a channel swap is a frame that is not the page. SKIPS when the machine's EGL cannot import a dma-buf | EGL |
 | `webengine-input` | the page hears the pointer (`:hover`), the button (an inline style set by the page's own script), the keys (a `keydown` listener with no field focused) and the wheel (a band below the fold comes into view) — each asserted as a colour in the engine's own frame | nothing |
+| `webengine-scrollbar` | the page's bars are the AppKit's scroller — fifteen points of #d9d9d9 groove with a white knob edged in #bcbcbc and arrow buttons of black triangles — that they take their points out of the LAYOUT, that the other axis gets one too, that a page which paints its own bar loses to the desktop's, and that `AGWEBVIEW_NO_SCROLLBAR_STYLE` puts WebKit's overlay bars back | nothing |
 
 ```sh
 /usr/bin/clang-19 cmake -S . -B build -DCMAKE_C_COMPILER=/usr/bin/clang-19 \
@@ -490,6 +491,52 @@ batch of three, so the 2-D smooth form (which carries a distance) stays.
 What this does NOT add is wheel **acceleration**: a wheel is one line per notch here, while macOS applies acceleration and
 most X11 toolkits turn a notch into three lines. `AGWebEnginePointsPerWheelLine` is the one knob if a person wants a
 fuller page per click.
+
+## The page's scrollbars are the AppKit's scroller now
+
+A page's bars are drawn by the WEB PROCESS — `ScrollbarTheme::nativeTheme()` is `ScrollbarThemeAdwaita` for this port —
+and on WPE they are **overlay** bars: `usesOverlayScrollbars()` is `SystemSettings::overlayScrolling().value_or(true)`,
+and unlike GTK there is no `GTK_OVERLAY_SCROLLING` override on this platform. So they appear while a page is being scrolled
+and fade away, and a page at rest has no bar at all. MEASURED on a nested session with a 3300-point document: two seconds
+after a scroll the page's own colour ran to its last column and there was nothing to see.
+
+They are restyled through a **user style sheet**, which needs no fork change at all: `webkit_web_view_get_user_content_manager`
+is public in WPE, so it is two calls on the view the engine already made.
+
+**THE NUMBERS ARE THE APPKIT'S, AND THE COPY IS THE ONE COUPLING WORTH KNOWING ABOUT.** This component is a layer below the
+AppKit and links none of it, so it cannot ask `+[NSScroller scrollerWidth]` or read a colour; the values are copies of
+`libagora-app/NSColor.m`'s doors with their sources named in `AGWebEngine-WPE.c`, and the probe measures the drawn result
+rather than trusting either side:
+
+| the bar | the AppKit's door |
+|---|---|
+| 15 points thick | `+[NSScroller scrollerWidth]` |
+| groove `#d9d9d9` | `+cg_scrollerTrackColor` (0.85) |
+| knob white on `#bcbcbc`, radius 3 | `+controlBackgroundColor` over `+controlDarkShadowColor` (0.737), `NS_SCROLLER_BAR_RADIUS` |
+| one arrow at each end, black triangle 5.2 by 3.5 points | `NSScrollerCell`'s arrow, `NS_SCROLLER_ARROW_HALF`/`…_HEIGHT` of a 15-point button |
+
+**TWO THINGS ABOUT WEBKIT'S CUSTOM SCROLLBARS ARE NOT OBVIOUS.** Its theme puts TWO buttons at each end
+(`ScrollbarButtonsDoubleBoth`), and `:single-button` is a question an author can ask and not a choice one can make — it
+matches whatever placement the theme already has. So the second of each pair is dropped with `display: none`, which also
+gives its fifteen points back to the groove: MEASURED before that, the bar was up-down-knob-groove-up-down. And the
+triangles are inline SVG, because CSS has no triangle primitive and the button pseudo-element takes only an image.
+
+**STYLING `::-webkit-scrollbar` ALSO ENDS THE OVERLAY BEHAVIOUR, AND THAT IS THE POINT RATHER THAN A SIDE EFFECT.**
+WebKit's `usesLegacyScrollbarStyle` makes the bar part of the layout (`LocalFrameView.cpp:1677`), so it keeps its fifteen
+points out of the viewport and stays on screen — what an `NSScroller` does in a scroll view, and the reason a person can
+see where they are without touching the wheel. The reflow is the honest cost, and it is the same one every desktop browser
+had before overlay bars.
+
+MEASURED in `webengine-scrollbar`, on the engine's own frame: the bar's column holds `#d9d9d9` ×149, `#ffffff` ×43, the
+knob's `#bcbcbc` borders, the arrow ink, and it is IDENTICAL a second and a half later; the page's colour stops at x=304 of
+320; a page wider than the viewport gets the same treatment along the bottom; and a page that declares its own
+`::-webkit-scrollbar { width: 30px; background: #ff0000 }` gets the desktop's fifteen points instead, with no red anywhere
+— the user level "always override[s] other style sheets", as WebKit's own header says. `AGWEBVIEW_NO_SCROLLBAR_STYLE=1`
+puts WebKit's bars back, which is what makes the difference measurable: without the sheet the column holds only tints of
+the page's own colour.
+
+The one thing NOT copied is the knob's grip: Agora's scroller draws three dimples down the knob's centre, and at fifteen
+points with a thumb that is often shorter than their span a CSS gradient reads as a smudge rather than as a grip.
 
 ## The first load took 6.5 seconds, and it was a vblank wait
 
