@@ -528,15 +528,25 @@ see where they are without touching the wheel. The reflow is the honest cost, an
 had before overlay bars.
 
 MEASURED in `webengine-scrollbar`, on the engine's own frame: the bar's column holds `#d9d9d9` ×149, `#ffffff` ×43, the
-knob's `#bcbcbc` borders, the arrow ink, and it is IDENTICAL a second and a half later; the page's colour stops at x=304 of
+knob's `#bcbcbc` borders, the arrow ink, and it is IDENTICAL a second and a half later; the knob holds THREE hollow rings
+(counted, each crossed twice by a scan line, with white between the arcs) on both axes; the page's colour stops at x=304 of
 320; a page wider than the viewport gets the same treatment along the bottom; and a page that declares its own
 `::-webkit-scrollbar { width: 30px; background: #ff0000 }` gets the desktop's fifteen points instead, with no red anywhere
 — the user level "always override[s] other style sheets", as WebKit's own header says. `AGWEBVIEW_NO_SCROLLBAR_STYLE=1`
 puts WebKit's bars back, which is what makes the difference measurable: without the sheet the column holds only tints of
 the page's own colour.
 
-The one thing NOT copied is the knob's grip: Agora's scroller draws three dimples down the knob's centre, and at fifteen
-points with a thumb that is often shorter than their span a CSS gradient reads as a smudge rather than as a grip.
+**THE GRIP IS THREE HOLLOW RINGS, NOT THREE DOTS**, which is the one part of the art a gradient cannot draw and the
+reason it is an inline SVG too: `NSScrollerCell`'s `fn_draw_grip` strokes a 4-point circle in `+controlDarkShadowColor`
+with a 1-point line, 8 points centre to centre, and the knob's own white shows through the middle of each — a filled dot
+would lose exactly the thing the sample draws. Two things about it are worth knowing. **A `#` INSIDE A `data:` URI IS A
+FRAGMENT**: the first version wrote `stroke='#bcbcbc'` and drew NOTHING, with no console message anywhere — the arrows had
+worked only because `fill='black'` happens to contain no hash, and the colour is `%23bcbcbc` now. And **CSS CANNOT TEST
+THE KNOB'S LENGTH**, which is what `fn_draw_grip` does before it draws: it returns early when the knob is shorter than 24
+points (two spacings plus two diameters), because a knob with no room for the three would be all grip and no knob. A
+custom scrollbar's pseudo-element has no way to ask its own length, so here the grip is always drawn and a short thumb
+CLIPS it — which reads as one ring rather than as three. That is the closest CSS gets, and it is the same shape of
+deviation as the ones this file records elsewhere: the drawing is exact where it can be and honest where it cannot.
 
 ## The first load took 6.5 seconds, and it was a vblank wait
 

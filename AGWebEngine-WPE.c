@@ -88,25 +88,55 @@ static void ag_web_push_geometry(AGWebEngine *engine, int size_changed, int scal
  * the CSS. This is the first, with the AppKit's doors named in every value so a change there is a change here, and the
  * `webengine-scrollbar` probe measures the drawn result rather than trusting either side.
  *
- * THE TRIANGLES ARE INLINE SVG because CSS has no triangle and the button pseudo-element takes only a background image;
- * the geometry is `NSScrollerCell`'s (`NS_SCROLLER_ARROW_HALF` 0.176 and `…_HEIGHT` 0.235 of a 15-point button). */
+ * THE TRIANGLES AND THE GRIP ARE INLINE SVG because CSS has no triangle primitive, a ring is not a gradient, and the
+ * scrollbar pseudo-elements take only background images. The arrow's geometry is `NSScrollerCell`'s
+ * (`NS_SCROLLER_ARROW_HALF` 0.176 and `…_HEIGHT` 0.235 of a 15-point button) and the grip's is `fn_draw_grip`'s.
+ *
+ * **A `#` INSIDE A `data:` URI IS A FRAGMENT AND SILENTLY TRUNCATES THE SVG.** The grip's stroke colour is written
+ * `%23bcbcbc` for that reason: the first version said `stroke='#bcbcbc'`, drew NOTHING, and said nothing about it — the
+ * arrows had worked only because `fill='black'` happens to contain no hash. A background image that does not load is
+ * indistinguishable from one that was never set, which is why the probe counts the rings rather than trusting the CSS. */
 #define AG_WEB_SCROLLBAR_WIDTH 15
 #define AG_WEB_SCROLLBAR_GROOVE "#d9d9d9"	/* +cg_scrollerTrackColor: 0.85 */
 #define AG_WEB_SCROLLBAR_KNOB "#ffffff"		/* +controlBackgroundColor */
 #define AG_WEB_SCROLLBAR_EDGE "#bcbcbc"		/* +controlDarkShadowColor: 0.737 */
-#define AG_WEB_SCROLLBAR_BUTTON_EDGE "#999999"	/* +controlShadowColor: 0.60 */
 
 /* FIFTEEN POINTS IS `+[NSScroller scrollerWidth]`, and every colour here is a door in `libagora-app/NSColor.m`:
  * `+cg_scrollerTrackColor` (0.85) for the groove, `+controlBackgroundColor` (white) for the knob, `+controlDarkShadowColor`
- * (0.737) for its edge and `+controlShadowColor` (0.60) for the buttons'. The knob's radius is `NS_SCROLLER_BAR_RADIUS`.
+ * (0.737) for its edge — the same grey the buttons' rings use — and the knob's radius is `NS_SCROLLER_BAR_RADIUS`.
  * THE NUMBERS CANNOT BE ASKED FOR ACROSS THE COMPONENT BOUNDARY — this file links no AppKit — so they are copied with
  * their sources named, and `webengine-scrollbar` measures the drawn result rather than trusting either side. */
 static const char *const ag_web_scrollbar_css =
 	"::-webkit-scrollbar { width: 15px; height: 15px; }"
 	"::-webkit-scrollbar-track { background: " AG_WEB_SCROLLBAR_GROOVE "; }"
-	"::-webkit-scrollbar-thumb { background: " AG_WEB_SCROLLBAR_KNOB ";"
+	/* **AND THE GRIP: THREE HOLLOW RINGS DOWN THE KNOB'S CENTRE, WHICH IS `NSScrollerCell`'s OWN MARK.** Radius 2,
+	 * 1-point `+controlDarkShadowColor` stroke, 8 points centre to centre — and HOLLOW on purpose, because the sample's
+	 * dimple shows the knob's white through its middle rather than a darker grey. The image is 5 by 24 because the stroke
+	 * straddles the 4-point box, and it is sized rather than scaled (`background-size`) so a long thumb gets the grip at
+	 * the art's own size instead of a stretched one. The rings are laid into the thumb's PADDING box, which is the same
+	 * place `NSScrollerCell` centres them in. */
+	"::-webkit-scrollbar-thumb { background-color: " AG_WEB_SCROLLBAR_KNOB ";"
+	" background-image: url(\"data:image/svg+xml,"
+	"%3Csvg xmlns='http://www.w3.org/2000/svg' width='5' height='24'%3E"
+	"%3Cg fill='none' stroke='%23bcbcbc' stroke-width='1'%3E"
+	"%3Ccircle cx='2.5' cy='4' r='2'/%3E"
+	"%3Ccircle cx='2.5' cy='12' r='2'/%3E"
+	"%3Ccircle cx='2.5' cy='20' r='2'/%3E"
+	"%3C/g%3E%3C/svg%3E\");"
+	" background-size: 5px 24px; background-position: center; background-repeat: no-repeat;"
 	" border: 1px solid " AG_WEB_SCROLLBAR_EDGE "; border-radius: 3px;"
 	" min-height: 15px; min-width: 15px; }"
+	/* THE SAME GRIP ON THE OTHER AXIS, ROTATED: three rings in a row, so a horizontal knob is held the way a vertical one
+	 * is. `NSScrollerCell` takes the axis as an argument to `fn_draw_grip`; CSS takes it as a pseudo-class. */
+	"::-webkit-scrollbar-thumb:horizontal {"
+	" background-image: url(\"data:image/svg+xml,"
+	"%3Csvg xmlns='http://www.w3.org/2000/svg' width='24' height='5'%3E"
+	"%3Cg fill='none' stroke='%23bcbcbc' stroke-width='1'%3E"
+	"%3Ccircle cx='4' cy='2.5' r='2'/%3E"
+	"%3Ccircle cx='12' cy='2.5' r='2'/%3E"
+	"%3Ccircle cx='20' cy='2.5' r='2'/%3E"
+	"%3C/g%3E%3C/svg%3E\");"
+	" background-size: 24px 5px; }"
 	"::-webkit-scrollbar-corner { background: " AG_WEB_SCROLLBAR_GROOVE "; }"
 	/* **THE BUTTONS HAVE NO OUTLINE, WHICH IS `NSScrollerCell`'s OWN ARRANGEMENT**: it paints the whole frame in the
 	 * button face and then the groove only into the slot between them, so a button's edge is a CONTRAST and not a line.
@@ -996,7 +1026,13 @@ AGWebEngine *AGWebEngineCreateWithOptions(int width, int height, AGWebExport exp
 	 * the reason a person can see where they are in a page without moving the wheel. The reflow is the honest cost: a
 	 * page lays out 15 points narrower than it did while the bars were overlays.
 	 *
-	 * **THE LEVEL IS `USER`, WHICH OUTRANKS THE PAGE.** WebKit's own header says so ("its contents always override other
+	 * **ONE THING THE ART DOES THAT CSS CANNOT: IT SKIPS THE GRIP ON A SHORT KNOB.** `fn_draw_grip` returns early when the
+ * knob is shorter than 24 points — two spacings plus two diameters — because a knob with no room for the three would be
+ * all grip and no knob. A custom scrollbar's pseudo-element has no way to ask its own length, so here the grip is always
+ * drawn and a short thumb CLIPS it; that reads as a single ring rather than as three, which is the closest CSS gets and
+ * is stated rather than hidden.
+ *
+ * **THE LEVEL IS `USER`, WHICH OUTRANKS THE PAGE.** WebKit's own header says so ("its contents always override other
 	 * style sheets"), and for a desktop's pointer and bar vocabulary that is the answer we want: a site that paints its
 	 * own scrollbars gets Agora's unless `AGWEBVIEW_NO_SCROLLBAR_STYLE` is set — one name, read here, so a session can see
 	 * what WebKit draws on its own. */

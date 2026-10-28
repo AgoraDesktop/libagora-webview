@@ -43,7 +43,7 @@
 static const char *page =
 	"<html><head><title>scrollbar probe</title><style>"
 	"  html, body { margin:0; padding:0; background:#00c0c0; }"
-	"  #tail { height:1800px; }"
+	"  #tail { height:500px; }"
 	"</style></head><body><div id=tail></div></body></html>";
 
 /* THE APPKIT'S OWN NUMBERS, spelled here on purpose: this file is the one place that can catch the engine's copy of them
@@ -300,6 +300,60 @@ static void maybe_write_ppm(const struct App *app, const char *path)
 	fclose(f);
 }
 
+/* **THE GRIP, COUNTED RATHER THAN EYEBALLED: THREE HOLLOW RINGS DOWN THE KNOB'S CENTRE.** Each ring is a 5-point
+ * circle drawn as a 1-point stroke, so a scan across it finds ink at its two arcs with the knob's own WHITE between them —
+ * that hollow middle is the thing a filled dot would lose, and it is what makes this a check about the shape rather than
+ * about "something dark is on the knob".
+ *
+ * The runs are told apart from the knob's own border by their SIZE: a border row crosses the whole knob, while a ring's
+ * row touches at most six points of it and its ring is at least four rows tall. */
+static int grip_rings(struct App *app, int horizontal)
+{
+	int outer = horizontal ? app->frame_height - BAR_WIDTH : app->frame_width - BAR_WIDTH;
+	int limit = horizontal ? app->frame_width : app->frame_height;
+	int rings = 0;
+	int run = 0;
+	int run_hollow = 0;
+	int i;
+
+	for (i = BAR_WIDTH; i < limit - BAR_WIDTH; i++) {
+		int ink = 0;
+		int hollow = 0;
+		int j;
+
+		for (j = 2; j < BAR_WIDTH - 2; j++) {
+			uint32_t p = horizontal ? at(app, i, outer + j) : at(app, j + outer, i);
+			unsigned r = (p >> 16) & 0xFFu;
+			unsigned g = (p >> 8) & 0xFFu;
+			unsigned b = p & 0xFFu;
+			int is_ink = !(r > 245u && g > 245u && b > 245u) && !(r == g && g == b && r == TRACK_GREY);
+
+			if (is_ink) {
+				ink++;
+			} else if (j == BAR_WIDTH / 2) {
+				hollow = 1;
+			}
+		}
+		if (ink > 0 && ink <= 6) {
+			run++;
+			if (hollow && ink >= 2) {
+				run_hollow = 1;
+			}
+			continue;
+		}
+		/* A RING IS A RUN OF AT LEAST FOUR ROWS WITH A HOLLOW MIDDLE; the knob's rounded corners are one row each. */
+		if (run >= 4 && run_hollow) {
+			rings++;
+		}
+		run = 0;
+		run_hollow = 0;
+	}
+	if (run >= 4 && run_hollow) {
+		rings++;
+	}
+	return rings;
+}
+
 static int s_failed;
 
 static void check(int ok, const char *what)
@@ -373,6 +427,15 @@ int main(void)
 	      "and it is STILL drawn a second and a half later, having been touched by nothing");
 	check(found_edge, "and the knob's border grey (#bcbcbc) is too, so the knob is the AppKit's and not WebKit's");
 
+	/* **AND THE GRIP: THREE HOLLOW RINGS**, which is `NSScrollerCell`'s mark — radius 2, a 1-point `#bcbcbc` stroke, 8
+	 * points apart — and not three filled dots, because the knob's own white shows through the middle of each. */
+	{
+		int rings = grip_rings(&styled, 0);
+
+		printf("  (note: the knob holds %d hollow ring(s))\n", rings);
+		check(rings == 3, "the knob carries the APPKIT's grip: three HOLLOW rings, 8 points apart");
+	}
+
 	free(styled.frame);
 	AGWebEngineDestroy(styled.engine);
 
@@ -414,7 +477,7 @@ int main(void)
 
 		memset(&wide, 0, sizeof wide);
 		if (load_page(&wide, "<html><body style='margin:0;background:#00c0c0'>"
-				    "<div style='width:3000px;height:100px'></div></body></html>")) {
+				    "<div style='width:900px;height:100px'></div></body></html>")) {
 			struct Histogram bottom;
 			int bottom_edge = -1;
 			int y;
@@ -431,6 +494,12 @@ int main(void)
 			histogram_row(&wide, &bottom);
 			note_histogram("the bottom bar's row", &bottom);
 			check(histogram_has_grey(&bottom), "and that bar wears the AppKit's greys too");
+			{
+				int rings = grip_rings(&wide, 1);
+
+				printf("  (note: the horizontal knob holds %d hollow ring(s))\n", rings);
+				check(rings == 3, "and its knob carries the same three rings, laid along the bar");
+			}
 		} else {
 			printf("  (note: the wide page did not load; skipping the horizontal half)\n");
 		}
@@ -449,7 +518,7 @@ int main(void)
 		if (load_page(&site, "<html><head><style>"
 				     "::-webkit-scrollbar { width: 30px; background: #ff0000; }"
 				     "</style></head><body style='margin:0;background:#00c0c0'>"
-				     "<div style='height:1800px'></div></body></html>")) {
+				     "<div style='height:500px'></div></body></html>")) {
 			struct Histogram column;
 			int edge;
 			int red = 0;
